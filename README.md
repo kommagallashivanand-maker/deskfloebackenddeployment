@@ -16,7 +16,7 @@ erDiagram
     USERS ||--o{ TICKETS : "handles (assigned_to)"
 
     TEAMS {
-        bigint id PK
+        uuid id PK
         varchar name UK
         text description
         timestamp created_at
@@ -24,7 +24,7 @@ erDiagram
     }
 
     CATEGORIES {
-        bigint id PK
+        uuid id PK
         varchar name UK
         text description
         timestamp created_at
@@ -32,28 +32,28 @@ erDiagram
     }
 
     USERS {
-        bigint id PK
+        uuid id PK
         varchar employee_code UK
         varchar name
         varchar email UK
         varchar password
         varchar role
         varchar status
-        bigint team_id FK
+        uuid team_id FK
         timestamp created_at
         timestamp updated_at
     }
 
     TICKETS {
-        bigint id PK
+        uuid id PK
         varchar ticket_number UK
         varchar title
         text description
         varchar priority
         varchar status
-        bigint created_by FK
-        bigint assigned_to FK
-        bigint category_id FK
+        uuid created_by FK
+        uuid assigned_to FK
+        uuid category_id FK
         timestamp created_at
         timestamp updated_at
         timestamp resolved_at

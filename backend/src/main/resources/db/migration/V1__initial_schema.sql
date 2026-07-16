@@ -1,14 +1,14 @@
-
 CREATE TABLE teams (
-                       id BIGSERIAL PRIMARY KEY,
+                       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                        name VARCHAR(100) NOT NULL UNIQUE,
                        description TEXT,
+                       status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE categories (
-                            id BIGSERIAL PRIMARY KEY,
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                             name VARCHAR(100) NOT NULL UNIQUE,
                             description TEXT,
                             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -16,7 +16,7 @@ CREATE TABLE categories (
 );
 
 CREATE TABLE users (
-                       id BIGSERIAL PRIMARY KEY,
+                       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
                        employee_code VARCHAR(30) UNIQUE,
 
@@ -30,7 +30,7 @@ CREATE TABLE users (
 
                        status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
 
-                       team_id BIGINT,
+                       team_id UUID,
 
                        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -43,7 +43,7 @@ CREATE TABLE users (
 
 
 CREATE TABLE tickets (
-                         id BIGSERIAL PRIMARY KEY,
+                         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
                          ticket_number VARCHAR(30) NOT NULL UNIQUE,
 
@@ -55,11 +55,11 @@ CREATE TABLE tickets (
 
                          status VARCHAR(20) NOT NULL DEFAULT 'OPEN',
 
-                         created_by BIGINT NOT NULL,
+                         created_by UUID NOT NULL,
 
-                         assigned_to BIGINT,
+                         assigned_to UUID,
 
-                         category_id BIGINT NOT NULL,
+                         category_id UUID NOT NULL,
 
                          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
