@@ -162,10 +162,12 @@ public class TicketServiceImpl implements TicketService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId,
-            UUID assignedTo) {
-        log.info("Listing tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}",
-                page, size, status, priority, categoryId, assignedTo);
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
+            UUID assignedTo, String sortBy, String sortDir) {
+        log.info("Listing tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, sortBy={}, sortDir={}",
+                page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
+        
+        Sort sort = sortDir.equalsIgnoreCase("asc") ? Sort.by(sortBy).ascending() : Sort.by(sortBy).descending();
+        Pageable pageable = PageRequest.of(page, size, sort);
 
         Specification<Ticket> spec = (root, query, cb) -> {
             List<Predicate> predicates = new ArrayList<>();

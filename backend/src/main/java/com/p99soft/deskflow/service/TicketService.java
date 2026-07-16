@@ -12,5 +12,5 @@ public interface TicketService {
     TicketResponse createTicket(TicketRequest request);
     TicketResponse getTicketById(UUID id);
     TicketResponse updateTicket(UUID id, TicketRequest request);
-    PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId, UUID assignedTo);
+    PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId, UUID assignedTo, String sortBy, String sortDir);
 }

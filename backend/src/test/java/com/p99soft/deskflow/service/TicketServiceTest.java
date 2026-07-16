@@ -209,12 +209,40 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId);
+        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "desc");
 
         assertNotNull(responses);
         assertEquals(1, responses.getContent().size());
         assertEquals(0, responses.getPageNumber());
         assertEquals(1, responses.getTotalElements());
         verify(ticketRepository, times(1)).findAll(any(Specification.class), any(Pageable.class));
+    }
+
+    @Test
+    void testListTickets_SortingAscending() {
+        Page<Ticket> page = new PageImpl<>(Collections.singletonList(ticket));
+        org.mockito.ArgumentCaptor<Pageable> pageableCaptor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "asc");
+
+        Pageable capturedPageable = pageableCaptor.getValue();
+        assertNotNull(capturedPageable);
+        assertTrue(capturedPageable.getSort().getOrderFor("createdAt").isAscending());
+    }
+
+    @Test
+    void testListTickets_SortingDescending() {
+        Page<Ticket> page = new PageImpl<>(Collections.singletonList(ticket));
+        org.mockito.ArgumentCaptor<Pageable> pageableCaptor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "desc");
+
+        Pageable capturedPageable = pageableCaptor.getValue();
+        assertNotNull(capturedPageable);
+        assertTrue(capturedPageable.getSort().getOrderFor("createdAt").isDescending());
     }
 }

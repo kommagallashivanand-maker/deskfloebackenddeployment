@@ -52,10 +52,12 @@ public class TicketController {
             @RequestParam(required = false) Status status,
             @RequestParam(required = false) Priority priority,
             @RequestParam(name = "category", required = false) UUID categoryId,
-            @RequestParam(name = "assignee", required = false) UUID assignedTo) {
-        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}",
-                page, size, status, priority, categoryId, assignedTo);
-        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo);
+            @RequestParam(name = "assignee", required = false) UUID assignedTo,
+            @RequestParam(defaultValue = "createdAt") String sortBy,
+            @RequestParam(defaultValue = "desc") String sortDir) {
+        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, sortBy={}, sortDir={}",
+                page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
+        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
         return ResponseEntity.ok(response);
     }
 }
