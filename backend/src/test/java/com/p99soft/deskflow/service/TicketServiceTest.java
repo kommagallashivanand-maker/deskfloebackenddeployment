@@ -209,7 +209,7 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, categoryId, assigneeId);
+        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId);
 
         assertNotNull(responses);
         assertEquals(1, responses.getContent().size());

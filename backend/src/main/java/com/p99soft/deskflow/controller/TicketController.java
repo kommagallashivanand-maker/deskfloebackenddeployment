@@ -3,6 +3,7 @@ package com.p99soft.deskflow.controller;
 import com.p99soft.deskflow.dto.PageResponse;
 import com.p99soft.deskflow.dto.TicketRequest;
 import com.p99soft.deskflow.dto.TicketResponse;
+import com.p99soft.deskflow.enums.Priority;
 import com.p99soft.deskflow.enums.Status;
 import com.p99soft.deskflow.service.TicketService;
 import lombok.RequiredArgsConstructor;
@@ -49,11 +50,12 @@ public class TicketController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(required = false) Status status,
-            @RequestParam(required = false) UUID categoryId,
-            @RequestParam(required = false) UUID assignedTo) {
-        log.info("REST request to list tickets: page={}, size={}, status={}, categoryId={}, assignedTo={}",
-                page, size, status, categoryId, assignedTo);
-        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, categoryId, assignedTo);
+            @RequestParam(required = false) Priority priority,
+            @RequestParam(name = "category", required = false) UUID categoryId,
+            @RequestParam(name = "assignee", required = false) UUID assignedTo) {
+        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}",
+                page, size, status, priority, categoryId, assignedTo);
+        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo);
         return ResponseEntity.ok(response);
     }
 }

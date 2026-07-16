@@ -161,10 +161,10 @@ public class TicketServiceImpl implements TicketService {
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<TicketResponse> listTickets(int page, int size, Status status, UUID categoryId,
+    public PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId,
             UUID assignedTo) {
-        log.info("Listing tickets: page={}, size={}, status={}, categoryId={}, assignedTo={}",
-                page, size, status, categoryId, assignedTo);
+        log.info("Listing tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}",
+                page, size, status, priority, categoryId, assignedTo);
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
 
         Specification<Ticket> spec = (root, query, cb) -> {
@@ -172,6 +172,9 @@ public class TicketServiceImpl implements TicketService {
 
             if (status != null) {
                 predicates.add(cb.equal(root.get("status"), status));
+            }
+            if (priority != null) {
+                predicates.add(cb.equal(root.get("priority"), priority));
             }
             if (categoryId != null) {
                 predicates.add(cb.equal(root.get("category").get("id"), categoryId));
