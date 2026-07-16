@@ -245,4 +245,18 @@ public class TicketServiceTest {
         assertNotNull(capturedPageable);
         assertTrue(capturedPageable.getSort().getOrderFor("createdAt").isDescending());
     }
+
+    @Test
+    void testListTickets_SortingByResolvedAt() {
+        Page<Ticket> page = new PageImpl<>(Collections.singletonList(ticket));
+        org.mockito.ArgumentCaptor<Pageable> pageableCaptor = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "resolvedAt", "desc");
+
+        Pageable capturedPageable = pageableCaptor.getValue();
+        assertNotNull(capturedPageable);
+        assertTrue(capturedPageable.getSort().getOrderFor("resolvedAt").isDescending());
+    }
 }
