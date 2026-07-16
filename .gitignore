@@ -1,0 +1,16 @@
+# IntelliJ IDEA configurations
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Maven build directory
+target/
+**/target/
+
+# Compiled class files
+*.class
+
+# Log files
+*.log
