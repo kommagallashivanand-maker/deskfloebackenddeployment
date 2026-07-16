@@ -7,6 +7,21 @@ CREATE TABLE teams (
                        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE sla_policies (
+                              id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                              priority VARCHAR(20) NOT NULL UNIQUE,
+                              response_time_hours INT NOT NULL,
+                              resolution_time_hours INT NOT NULL,
+                              created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                              updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO sla_policies (priority, response_time_hours, resolution_time_hours) VALUES
+  ('URGENT', 1, 4),
+  ('HIGH', 4, 24),
+  ('MEDIUM', 8, 72),
+  ('LOW', 24, 120);
+
 CREATE TABLE categories (
                             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                             name VARCHAR(100) NOT NULL UNIQUE,
@@ -20,7 +35,9 @@ CREATE TABLE users (
 
                        employee_code VARCHAR(30) UNIQUE,
 
-                       name VARCHAR(150) NOT NULL,
+                       first_name VARCHAR(100) NOT NULL,
+
+                       last_name VARCHAR(100) NOT NULL,
 
                        email VARCHAR(255) NOT NULL UNIQUE,
 
@@ -60,6 +77,9 @@ CREATE TABLE tickets (
                          assigned_to UUID,
 
                          category_id UUID NOT NULL,
+
+                         first_responded_at TIMESTAMP,
+                         reopen_count INT NOT NULL DEFAULT 0,
 
                          created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 

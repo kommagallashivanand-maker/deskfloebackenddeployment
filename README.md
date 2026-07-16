@@ -19,6 +19,16 @@ erDiagram
         uuid id PK
         varchar name UK
         text description
+        varchar status
+        timestamp created_at
+        timestamp updated_at
+    }
+
+    SLA_POLICIES {
+        uuid id PK
+        varchar priority UK
+        int response_time_hours
+        int resolution_time_hours
         timestamp created_at
         timestamp updated_at
     }
@@ -34,7 +44,8 @@ erDiagram
     USERS {
         uuid id PK
         varchar employee_code UK
-        varchar name
+        varchar first_name
+        varchar last_name
         varchar email UK
         varchar password
         varchar role
@@ -54,6 +65,8 @@ erDiagram
         uuid created_by FK
         uuid assigned_to FK
         uuid category_id FK
+        timestamp first_responded_at
+        int reopen_count
         timestamp created_at
         timestamp updated_at
         timestamp resolved_at
