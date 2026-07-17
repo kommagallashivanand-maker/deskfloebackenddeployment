@@ -1,0 +1,15 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Local persistent data
+bi/metabase-data/
+bi/postgres-data/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
