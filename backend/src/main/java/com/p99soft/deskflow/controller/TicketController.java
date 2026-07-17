@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
 
 import java.util.UUID;
 
@@ -23,7 +24,7 @@ public class TicketController {
     private final TicketService ticketService;
 
     @PostMapping
-    public ResponseEntity<TicketResponse> createTicket(@RequestBody TicketRequest request) {
+    public ResponseEntity<TicketResponse> createTicket(@RequestBody @Valid TicketRequest request) {
         log.info("REST request to create ticket: {}", request.getTitle());
         TicketResponse response = ticketService.createTicket(request);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
@@ -39,7 +40,7 @@ public class TicketController {
     @PutMapping("/{id}")
     public ResponseEntity<TicketResponse> updateTicket(
             @PathVariable UUID id,
-            @RequestBody TicketRequest request) {
+            @RequestBody @Valid TicketRequest request) {
         log.info("REST request to update ticket ID: {}", id);
         TicketResponse response = ticketService.updateTicket(id, request);
         return ResponseEntity.ok(response);
