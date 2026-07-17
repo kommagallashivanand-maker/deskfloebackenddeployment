@@ -259,4 +259,209 @@ public class TicketServiceTest {
         assertNotNull(capturedPageable);
         assertTrue(capturedPageable.getSort().getOrderFor("resolvedAt").isDescending());
     }
+
+    @Test
+    void testCreateTicket_CreatorNotFound() {
+        TicketRequest request = TicketRequest.builder()
+                .createdBy(creatorId)
+                .build();
+        when(userRepository.findById(creatorId)).thenReturn(Optional.empty());
+        assertThrows(ResourceNotFoundException.class, () -> ticketService.createTicket(request));
+    }
+
+    @Test
+    void testCreateTicket_CategoryNotFound() {
+        TicketRequest request = TicketRequest.builder()
+                .createdBy(creatorId)
+                .categoryId(categoryId)
+                .build();
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(categoryRepository.findById(categoryId)).thenReturn(Optional.empty());
+        assertThrows(ResourceNotFoundException.class, () -> ticketService.createTicket(request));
+    }
+
+    @Test
+    void testCreateTicket_AssigneeNotFound() {
+        TicketRequest request = TicketRequest.builder()
+                .createdBy(creatorId)
+                .categoryId(categoryId)
+                .assignedTo(assigneeId)
+                .build();
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(categoryRepository.findById(categoryId)).thenReturn(Optional.of(category));
+        when(userRepository.findById(assigneeId)).thenReturn(Optional.empty());
+        assertThrows(ResourceNotFoundException.class, () -> ticketService.createTicket(request));
+    }
+
+    @Test
+    void testCreateTicket_WithAssigneeSuccess() {
+        TicketRequest request = TicketRequest.builder()
+                .title("Cannot connect to VPN")
+                .description("Timeout error")
+                .priority(Priority.HIGH)
+                .categoryId(categoryId)
+                .createdBy(creatorId)
+                .assignedTo(assigneeId)
+                .build();
+
+        ticket.setAssignedTo(assignee);
+        ticket.setFirstRespondedAt(LocalDateTime.now());
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(categoryRepository.findById(categoryId)).thenReturn(Optional.of(category));
+        when(userRepository.findById(assigneeId)).thenReturn(Optional.of(assignee));
+        when(ticketRepository.findLastTicketNumber()).thenReturn(Optional.empty());
+        when(ticketRepository.save(any(Ticket.class))).thenReturn(ticket);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.createTicket(request);
+        assertNotNull(response);
+        assertEquals(assigneeId, response.getAssignedTo());
+        assertNotNull(response.getFirstRespondedAt());
+    }
+
+    @Test
+    void testCreateTicket_NextTicketNumberFormatError() {
+        TicketRequest request = TicketRequest.builder()
+                .title("Cannot connect to VPN")
+                .description("Timeout error")
+                .priority(Priority.HIGH)
+                .categoryId(categoryId)
+                .createdBy(creatorId)
+                .build();
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(categoryRepository.findById(categoryId)).thenReturn(Optional.of(category));
+        when(ticketRepository.findLastTicketNumber()).thenReturn(Optional.of("INVALID-FORMAT"));
+        when(ticketRepository.save(any(Ticket.class))).thenReturn(ticket);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.createTicket(request);
+        assertNotNull(response);
+        assertEquals("TKT-1001", response.getTicketNumber());
+    }
+
+    @Test
+    void testUpdateTicket_NotFound() {
+        TicketRequest request = TicketRequest.builder().build();
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.empty());
+        assertThrows(ResourceNotFoundException.class, () -> ticketService.updateTicket(ticketId, request));
+    }
+
+    @Test
+    void testUpdateTicket_StatusTransitionToClosed() {
+        TicketRequest request = TicketRequest.builder()
+                .status(Status.CLOSED)
+                .build();
+
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.updateTicket(ticketId, request);
+        assertNotNull(response);
+        assertEquals(Status.CLOSED, response.getStatus());
+        assertNotNull(response.getClosedAt());
+    }
+
+    @Test
+    void testUpdateTicket_CategoryUpdateSuccess() {
+        UUID newCategoryId = UUID.randomUUID();
+        Category newCategory = Category.builder()
+                .id(newCategoryId)
+                .name(com.p99soft.deskflow.enums.CategoryType.BILLING)
+                .description("Billing support")
+                .build();
+
+        TicketRequest request = TicketRequest.builder()
+                .categoryId(newCategoryId)
+                .build();
+
+        ticket.setCategory(newCategory);
+
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(categoryRepository.findById(newCategoryId)).thenReturn(Optional.of(newCategory));
+        when(ticketRepository.save(any(Ticket.class))).thenReturn(ticket);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.updateTicket(ticketId, request);
+        assertNotNull(response);
+        assertEquals(newCategoryId, response.getCategoryId());
+    }
+
+    @Test
+    void testUpdateTicket_CategoryUpdateNotFound() {
+        UUID newCategoryId = UUID.randomUUID();
+        TicketRequest request = TicketRequest.builder()
+                .categoryId(newCategoryId)
+                .build();
+
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(categoryRepository.findById(newCategoryId)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> ticketService.updateTicket(ticketId, request));
+    }
+
+    @Test
+    void testUpdateTicket_AssigneeUpdateSuccess() {
+        TicketRequest request = TicketRequest.builder()
+                .assignedTo(assigneeId)
+                .build();
+
+        ticket.setAssignedTo(assignee);
+        ticket.setFirstRespondedAt(LocalDateTime.now());
+
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(userRepository.findById(assigneeId)).thenReturn(Optional.of(assignee));
+        when(ticketRepository.save(any(Ticket.class))).thenReturn(ticket);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.updateTicket(ticketId, request);
+        assertNotNull(response);
+        assertEquals(assigneeId, response.getAssignedTo());
+        assertNotNull(response.getFirstRespondedAt());
+    }
+
+    @Test
+    void testUpdateTicket_AssigneeUpdateNotFound() {
+        TicketRequest request = TicketRequest.builder()
+                .assignedTo(assigneeId)
+                .build();
+
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(userRepository.findById(assigneeId)).thenReturn(Optional.empty());
+
+        assertThrows(ResourceNotFoundException.class, () -> ticketService.updateTicket(ticketId, request));
+    }
+
+    @Test
+    void testMapToResponse_NullCreatedAt() {
+        ticket.setCreatedAt(null);
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.getTicketById(ticketId);
+        assertNotNull(response);
+        assertNotNull(response.getSlaDueAt());
+        assertNotNull(response.getResponseSlaDueAt());
+    }
+
+    @Test
+    void testUpdateTicket_WithFieldsProvided() {
+        TicketRequest request = TicketRequest.builder()
+                .title("New Title")
+                .description("New Description")
+                .priority(Priority.LOW)
+                .build();
+
+        when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(slaPolicyRepository.findByPriority(Priority.LOW)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.updateTicket(ticketId, request);
+        assertNotNull(response);
+        assertEquals("New Title", response.getTitle());
+        assertEquals("New Description", response.getDescription());
+        assertEquals(Priority.LOW, response.getPriority());
+    }
 }
