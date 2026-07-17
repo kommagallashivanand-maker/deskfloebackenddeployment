@@ -104,3 +104,26 @@ To run the backend service and execute migrations:
    # On Linux/macOS
    ./mvnw spring-boot:run
    ```
+
+---
+
+## API Documentation & Endpoint Reference
+
+### Ticket Management APIs (`/api/v1/tickets`)
+
+| Method | Endpoint | Description | Query Parameters / Path Variables |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/api/v1/tickets` | Create a new ticket with input validation | None (JSON Body required) |
+| **GET** | `/api/v1/tickets/{id}` | Get detailed information of a ticket by UUID | `id` (Path variable) |
+| **PUT** | `/api/v1/tickets/{id}` | Update an existing ticket (supports partial updates) | `id` (Path variable), JSON Body |
+| **GET** | `/api/v1/tickets` | List tickets with pagination, sorting, and filters | `page`, `size`, `status`, `priority`, `category`, `assignee`, `sortBy`, `sortDir` |
+
+---
+
+### Interactive Swagger UI
+
+The project features fully integrated OpenAPI 3/Swagger documentation conforming to enterprise developer standards. When the application is running locally, you can access:
+
+* **Interactive Swagger UI**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) — used to view, explore, and trigger REST API endpoints directly from your browser.
+* **Raw OpenAPI JSON Specs**: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs) — raw OpenAPI 3.0 specification definition.
+
