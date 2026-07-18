@@ -5,6 +5,8 @@ import com.p99soft.deskflow.enums.Status;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -69,6 +71,10 @@ public class Ticket {
 
     @Column(name = "closed_at")
     private LocalDateTime closedAt;
+
+    @OneToMany(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    private List<TicketAttachment> attachments = new ArrayList<>();
 
     @PrePersist
     protected void onCreate() {

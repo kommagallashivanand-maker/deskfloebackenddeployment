@@ -4,17 +4,20 @@ import com.p99soft.deskflow.dto.PageResponse;
 import com.p99soft.deskflow.dto.TicketRequest;
 import com.p99soft.deskflow.dto.TicketResponse;
 import com.p99soft.deskflow.entity.Category;
-import com.p99soft.deskflow.entity.SlaPolicy;
 import com.p99soft.deskflow.entity.Ticket;
 import com.p99soft.deskflow.entity.User;
 import com.p99soft.deskflow.enums.Priority;
 import com.p99soft.deskflow.enums.Status;
 import com.p99soft.deskflow.exception.ResourceNotFoundException;
 import com.p99soft.deskflow.repository.CategoryRepository;
-import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
 import com.p99soft.deskflow.service.TicketService;
+import com.p99soft.deskflow.mapper.TicketMapper;
+import com.p99soft.deskflow.entity.TicketAttachment;
+import com.p99soft.deskflow.service.StorageService;
+import org.springframework.web.multipart.MultipartFile;
+import java.io.IOException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -40,12 +43,24 @@ public class TicketServiceImpl implements TicketService {
     private final TicketRepository ticketRepository;
     private final UserRepository userRepository;
     private final CategoryRepository categoryRepository;
-    private final SlaPolicyRepository slaPolicyRepository;
+    private final TicketMapper ticketMapper;
+    private final StorageService storageService;
 
     @Override
     @Transactional
     public TicketResponse createTicket(TicketRequest request) {
-        log.info("Creating ticket: title={}, creatorId={}", request.getTitle(), request.getCreatedBy());
+        return createTicketInternal(request, null);
+    }
+
+    @Override
+    @Transactional
+    public TicketResponse createTicket(TicketRequest request, List<MultipartFile> files) {
+        return createTicketInternal(request, files);
+    }
+
+    private TicketResponse createTicketInternal(TicketRequest request, List<MultipartFile> files) {
+        log.info("Creating ticket: title={}, creatorId={}, fileCount={}", 
+                request.getTitle(), request.getCreatedBy(), files != null ? files.size() : 0);
         User creator = userRepository.findById(request.getCreatedBy())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Creator User not found with id: " + request.getCreatedBy()));
@@ -78,14 +93,43 @@ public class TicketServiceImpl implements TicketService {
                 .reopenCount(0)
                 .build();
 
-        // If ticket is assigned immediately on creation, set first responded timestamp
         if (assignee != null) {
-            ticket.setFirstRespondedAt(LocalDateTime.now());
+            ticket.setFirstRespondedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
         }
+
+        processAttachments(ticket, files);
 
         Ticket savedTicket = ticketRepository.save(ticket);
         log.info("Ticket created successfully: id={}, ticketNumber={}", savedTicket.getId(), savedTicket.getTicketNumber());
-        return mapToResponse(savedTicket);
+        return ticketMapper.mapToResponse(savedTicket);
+    }
+
+    private void processAttachments(Ticket ticket, List<MultipartFile> files) {
+        if (files == null || files.isEmpty()) {
+            return;
+        }
+        for (MultipartFile file : files) {
+            if (file != null && !file.isEmpty()) {
+                uploadAndAttachFile(ticket, file);
+            }
+        }
+    }
+
+    private void uploadAndAttachFile(Ticket ticket, MultipartFile file) {
+        try {
+            String fileUrl = storageService.uploadFile(file);
+            TicketAttachment attachment = TicketAttachment.builder()
+                    .ticket(ticket)
+                    .fileName(file.getOriginalFilename())
+                    .fileUrl(fileUrl)
+                    .fileType(file.getContentType())
+                    .fileSize(file.getSize())
+                    .build();
+            ticket.getAttachments().add(attachment);
+        } catch (IOException e) {
+            log.error("Failed to upload attachment file during ticket creation", e);
+            throw new IllegalArgumentException("Could not store file attachment: " + e.getMessage(), e);
+        }
     }
 
     @Override
@@ -94,7 +138,7 @@ public class TicketServiceImpl implements TicketService {
         log.info("Retrieving ticket by ID: {}", id);
         Ticket ticket = ticketRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket not found with id: " + id));
-        return mapToResponse(ticket);
+        return ticketMapper.mapToResponse(ticket);
     }
 
     @Override
@@ -104,26 +148,7 @@ public class TicketServiceImpl implements TicketService {
         Ticket ticket = ticketRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Ticket not found with id: " + id));
 
-        Status oldStatus = ticket.getStatus();
-        Status newStatus = request.getStatus();
-
-        // Reopen validation: Transition from RESOLVED/CLOSED back to OPEN/IN_PROGRESS
-        if (newStatus != null && newStatus != oldStatus) {
-            if ((oldStatus == Status.RESOLVED || oldStatus == Status.CLOSED) &&
-                    (newStatus == Status.OPEN || newStatus == Status.IN_PROGRESS)) {
-                log.info("Ticket reopened: incrementing reopen count for ticket ID: {}", id);
-                ticket.setReopenCount(ticket.getReopenCount() + 1);
-            }
-
-            ticket.setStatus(newStatus);
-
-            // Handle resolution/close timestamps
-            if (newStatus == Status.RESOLVED) {
-                ticket.setResolvedAt(LocalDateTime.now());
-            } else if (newStatus == Status.CLOSED) {
-                ticket.setClosedAt(LocalDateTime.now());
-            }
-        }
+        handleStatusTransition(ticket, request.getStatus());
 
         if (request.getTitle() != null) {
             ticket.setTitle(request.getTitle());
@@ -135,28 +160,58 @@ public class TicketServiceImpl implements TicketService {
             ticket.setPriority(request.getPriority());
         }
 
-        if (request.getCategoryId() != null) {
-            Category category = categoryRepository.findById(request.getCategoryId())
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "Category not found with id: " + request.getCategoryId()));
-            ticket.setCategory(category);
-        }
-
-        if (request.getAssignedTo() != null) {
-            User assignee = userRepository.findById(request.getAssignedTo())
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "Assignee User not found with id: " + request.getAssignedTo()));
-
-            // Set first response timestamp if it's the first time an assignee is set
-            if (ticket.getAssignedTo() == null && ticket.getFirstRespondedAt() == null) {
-                ticket.setFirstRespondedAt(LocalDateTime.now());
-            }
-            ticket.setAssignedTo(assignee);
-        }
+        updateCategory(ticket, request.getCategoryId());
+        updateAssignee(ticket, request.getAssignedTo());
 
         Ticket updatedTicket = ticketRepository.save(ticket);
         log.info("Ticket updated successfully: id={}", updatedTicket.getId());
-        return mapToResponse(updatedTicket);
+        return ticketMapper.mapToResponse(updatedTicket);
+    }
+
+    private void handleStatusTransition(Ticket ticket, Status newStatus) {
+        Status oldStatus = ticket.getStatus();
+        if (newStatus == null || newStatus == oldStatus) {
+            return;
+        }
+
+        // Reopen validation: Transition from RESOLVED/CLOSED back to OPEN/IN_PROGRESS
+        if ((oldStatus == Status.RESOLVED || oldStatus == Status.CLOSED) &&
+                (newStatus == Status.OPEN || newStatus == Status.IN_PROGRESS)) {
+            log.info("Ticket reopened: incrementing reopen count for ticket ID: {}", ticket.getId());
+            ticket.setReopenCount(ticket.getReopenCount() + 1);
+        }
+
+        ticket.setStatus(newStatus);
+
+        // Handle resolution/close timestamps
+        if (newStatus == Status.RESOLVED) {
+            ticket.setResolvedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+        } else if (newStatus == Status.CLOSED) {
+            ticket.setClosedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+        }
+    }
+
+    private void updateCategory(Ticket ticket, UUID categoryId) {
+        if (categoryId != null) {
+            Category category = categoryRepository.findById(categoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Category not found with id: " + categoryId));
+            ticket.setCategory(category);
+        }
+    }
+
+    private void updateAssignee(Ticket ticket, UUID assignedTo) {
+        if (assignedTo != null) {
+            User assignee = userRepository.findById(assignedTo)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Assignee User not found with id: " + assignedTo));
+
+            // Set first response timestamp if it's the first time an assignee is set
+            if (ticket.getAssignedTo() == null && ticket.getFirstRespondedAt() == null) {
+                ticket.setFirstRespondedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+            }
+            ticket.setAssignedTo(assignee);
+        }
     }
 
     @Override
@@ -191,7 +246,7 @@ public class TicketServiceImpl implements TicketService {
         Page<Ticket> ticketPage = ticketRepository.findAll(spec, pageable);
         log.info("Found {} tickets on page {} of {}", ticketPage.getNumberOfElements(), ticketPage.getNumber(), ticketPage.getTotalPages());
         List<TicketResponse> responses = ticketPage.getContent().stream()
-                .map(this::mapToResponse)
+                .map(ticketMapper::mapToResponse)
                 .toList();
 
         return PageResponse.<TicketResponse>builder()
@@ -216,42 +271,5 @@ public class TicketServiceImpl implements TicketService {
         } catch (NumberFormatException e) {
             return "TKT-1001";
         }
-    }
-
-    private TicketResponse mapToResponse(Ticket ticket) {
-        TicketResponse response = TicketResponse.builder()
-                .id(ticket.getId())
-                .ticketNumber(ticket.getTicketNumber())
-                .title(ticket.getTitle())
-                .description(ticket.getDescription())
-                .priority(ticket.getPriority())
-                .status(ticket.getStatus())
-                .createdBy(ticket.getCreatedBy().getId())
-                .assignedTo(ticket.getAssignedTo() != null ? ticket.getAssignedTo().getId() : null)
-                .categoryId(ticket.getCategory().getId())
-                .firstRespondedAt(ticket.getFirstRespondedAt())
-                .reopenCount(ticket.getReopenCount())
-                .createdAt(ticket.getCreatedAt())
-                .updatedAt(ticket.getUpdatedAt())
-                .resolvedAt(ticket.getResolvedAt())
-                .closedAt(ticket.getClosedAt())
-                .build();
-
-        // Calculate SLA due dates dynamically
-        Optional<SlaPolicy> policyOpt = slaPolicyRepository.findByPriority(ticket.getPriority());
-        if (policyOpt.isPresent()) {
-            SlaPolicy policy = policyOpt.get();
-            if (ticket.getCreatedAt() != null) {
-                response.setResponseSlaDueAt(ticket.getCreatedAt().plusHours(policy.getResponseTimeHours()));
-                response.setSlaDueAt(ticket.getCreatedAt().plusHours(policy.getResolutionTimeHours()));
-            } else {
-                // For pre-persisted tickets before pre-persist callback triggers
-                LocalDateTime now = LocalDateTime.now();
-                response.setResponseSlaDueAt(now.plusHours(policy.getResponseTimeHours()));
-                response.setSlaDueAt(now.plusHours(policy.getResolutionTimeHours()));
-            }
-        }
-
-        return response;
     }
 }

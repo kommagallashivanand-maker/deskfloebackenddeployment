@@ -19,8 +19,15 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 import jakarta.validation.Valid;
-
+import org.springframework.http.MediaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.Validator;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -31,11 +38,14 @@ import java.util.UUID;
 public class TicketController {
 
     private final TicketService ticketService;
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+    private final Validator validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(
-        summary = "Create a new ticket", 
-        description = "Creates a ticket using the provided details. All mandatory fields (title, priority, categoryId, createdBy) must be present and valid."
+        summary = "Create a new ticket (JSON)", 
+        description = "Creates a ticket using the provided details. All mandatory fields (title, categoryId, createdBy) must be present and valid."
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "201", description = "Ticket successfully created", 
@@ -46,8 +56,38 @@ public class TicketController {
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
     })
     public ResponseEntity<TicketResponse> createTicket(@RequestBody @Valid TicketRequest request) {
-        log.info("REST request to create ticket: {}", request.getTitle());
+        log.info("REST request to create ticket (JSON): {}", request.getTitle());
         TicketResponse response = ticketService.createTicket(request);
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(
+        summary = "Create a new ticket with attachments (Multipart)", 
+        description = "Creates a ticket and uploads attachments in a single request. Send the ticket details as a JSON part named 'ticket', and files as 'files'."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "201", description = "Ticket and attachments successfully created", 
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TicketResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid request payload or validation constraint violation", 
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "500", description = "Internal server error occurred", 
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
+    })
+    public ResponseEntity<TicketResponse> createTicketMultipart(
+            @RequestPart("ticket") String ticketJson,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files) throws Exception {
+        log.info("REST request to create ticket with attachments (Multipart): filesCount={}", 
+                files != null ? files.size() : 0);
+        
+        TicketRequest request = objectMapper.readValue(ticketJson, TicketRequest.class);
+        
+        Set<ConstraintViolation<TicketRequest>> violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
+        
+        TicketResponse response = ticketService.createTicket(request, files);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 

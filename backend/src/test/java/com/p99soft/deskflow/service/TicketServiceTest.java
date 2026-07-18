@@ -15,6 +15,7 @@ import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
 import com.p99soft.deskflow.service.Impl.TicketServiceImpl;
+import com.p99soft.deskflow.service.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -46,8 +48,10 @@ public class TicketServiceTest {
     private CategoryRepository categoryRepository;
     @Mock
     private SlaPolicyRepository slaPolicyRepository;
+    @Mock
+    private StorageService storageService;
 
-    @InjectMocks
+    private com.p99soft.deskflow.mapper.TicketMapper ticketMapper;
     private TicketServiceImpl ticketService;
 
     private User creator;
@@ -62,6 +66,9 @@ public class TicketServiceTest {
 
     @BeforeEach
     void setUp() {
+        ticketMapper = new com.p99soft.deskflow.mapper.TicketMapper(slaPolicyRepository, storageService);
+        ticketService = new TicketServiceImpl(ticketRepository, userRepository, categoryRepository, ticketMapper, storageService);
+
         ticketId = UUID.randomUUID();
         creatorId = UUID.randomUUID();
         assigneeId = UUID.randomUUID();
@@ -138,6 +145,46 @@ public class TicketServiceTest {
         assertNotNull(response.getSlaDueAt());
         assertNotNull(response.getResponseSlaDueAt());
 
+        verify(ticketRepository, times(1)).save(any(Ticket.class));
+    }
+
+    @Test
+    void testCreateTicket_WithAttachments_Success() throws Exception {
+        TicketRequest request = TicketRequest.builder()
+                .title("Cannot connect to VPN")
+                .description("Timeout error")
+                .priority(Priority.HIGH)
+                .categoryId(categoryId)
+                .createdBy(creatorId)
+                .build();
+
+        MockMultipartFile file1 = new MockMultipartFile("files", "test1.txt", "text/plain", "file content 1".getBytes());
+        MockMultipartFile file2 = new MockMultipartFile("files", "test2.jpg", "image/jpeg", "file content 2".getBytes());
+        java.util.List<org.springframework.web.multipart.MultipartFile> files = java.util.List.of(file1, file2);
+
+        when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
+        when(categoryRepository.findById(categoryId)).thenReturn(Optional.of(category));
+        when(ticketRepository.findLastTicketNumber()).thenReturn(Optional.empty());
+        when(storageService.uploadFile(file1)).thenReturn("https://test-bucket.s3.amazonaws.com/uploads/guid1.txt");
+        when(storageService.uploadFile(file2)).thenReturn("https://test-bucket.s3.amazonaws.com/uploads/guid2.jpg");
+        when(storageService.generatePresignedUrl(anyString())).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ticketRepository.save(any(Ticket.class))).thenAnswer(invocation -> {
+            Ticket saved = invocation.getArgument(0);
+            saved.setId(ticketId);
+            return saved;
+        });
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        TicketResponse response = ticketService.createTicket(request, files);
+
+        assertNotNull(response);
+        assertEquals("TKT-1001", response.getTicketNumber());
+        assertEquals(2, response.getAttachments().size());
+        assertEquals("test1.txt", response.getAttachments().get(0).getFileName());
+        assertEquals("test2.jpg", response.getAttachments().get(1).getFileName());
+
+        verify(storageService, times(1)).uploadFile(file1);
+        verify(storageService, times(1)).uploadFile(file2);
         verify(ticketRepository, times(1)).save(any(Ticket.class));
     }
 

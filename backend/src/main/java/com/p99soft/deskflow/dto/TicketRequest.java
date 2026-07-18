@@ -22,7 +22,6 @@ public class TicketRequest {
     @Schema(description = "Detailed explanation of the issue", example = "Unable to connect to the corporate VPN from home using Cisco AnyConnect.")
     private String description;
 
-    @NotNull(message = "Priority is required")
     @Schema(description = "Priority level of the ticket", example = "HIGH")
     private Priority priority;
 
