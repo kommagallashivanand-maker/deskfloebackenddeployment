@@ -15,5 +15,5 @@ public interface TicketService {
     TicketResponse createTicket(TicketRequest request, List<MultipartFile> files);
     TicketResponse getTicketById(UUID id);
     TicketResponse updateTicket(UUID id, TicketRequest request);
-    PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId, UUID assignedTo, String sortBy, String sortDir);
+    PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId, UUID assignedTo, String search, String sortBy, String sortDir);
 }

@@ -256,7 +256,7 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "desc");
+        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "createdAt", "desc");
 
         assertNotNull(responses);
         assertEquals(1, responses.getContent().size());
@@ -272,7 +272,7 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "asc");
+        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "createdAt", "asc");
 
         Pageable capturedPageable = pageableCaptor.getValue();
         assertNotNull(capturedPageable);
@@ -286,7 +286,7 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "desc");
+        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "createdAt", "desc");
 
         Pageable capturedPageable = pageableCaptor.getValue();
         assertNotNull(capturedPageable);
@@ -300,11 +300,25 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "resolvedAt", "desc");
+        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "resolvedAt", "desc");
 
         Pageable capturedPageable = pageableCaptor.getValue();
         assertNotNull(capturedPageable);
         assertTrue(capturedPageable.getSort().getOrderFor("resolvedAt").isDescending());
+    }
+
+    @Test
+    void testListTickets_WithSearchKeyword() {
+        Page<Ticket> page = new PageImpl<>(Collections.singletonList(ticket));
+        when(ticketRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
+        when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
+
+        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, null, null, null, null, "VPN", "createdAt", "desc");
+
+        assertNotNull(responses);
+        assertEquals(1, responses.getContent().size());
+        assertEquals("TKT-1001", responses.getContent().get(0).getTicketNumber());
+        verify(ticketRepository, times(1)).findAll(any(Specification.class), any(Pageable.class));
     }
 
     @Test

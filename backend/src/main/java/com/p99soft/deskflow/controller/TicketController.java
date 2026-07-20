@@ -168,14 +168,17 @@ public class TicketController {
             @Parameter(description = "Filter tickets by Assignee User UUID", example = "20000000-0000-0000-0000-000000000001")
             @RequestParam(name = "assignee", required = false) UUID assignedTo,
             
+            @Parameter(description = "Free-text search across ticket number, title, and description", example = "VPN")
+            @RequestParam(required = false) String search,
+            
             @Parameter(description = "Field name to sort the results by", example = "createdAt")
             @RequestParam(defaultValue = "createdAt") String sortBy,
             
             @Parameter(description = "Sorting direction ('asc' for ascending, 'desc' for descending)", example = "desc")
             @RequestParam(defaultValue = "desc") String sortDir) {
-        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, sortBy={}, sortDir={}",
-                page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
-        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
+        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, search={}, sortBy={}, sortDir={}",
+                page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);
+        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);
         return ResponseEntity.ok(response);
     }
 }

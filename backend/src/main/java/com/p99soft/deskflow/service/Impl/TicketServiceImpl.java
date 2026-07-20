@@ -217,9 +217,9 @@ public class TicketServiceImpl implements TicketService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<TicketResponse> listTickets(int page, int size, Status status, Priority priority, UUID categoryId,
-            UUID assignedTo, String sortBy, String sortDir) {
-        log.info("Listing tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, sortBy={}, sortDir={}",
-                page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
+            UUID assignedTo, String search, String sortBy, String sortDir) {
+        log.info("Listing tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, search={}, sortBy={}, sortDir={}",
+                page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);
         
         Sort sort = sortDir.equalsIgnoreCase("asc") ? Sort.by(sortBy).ascending() : Sort.by(sortBy).descending();
         Pageable pageable = PageRequest.of(page, size, sort);
@@ -238,6 +238,13 @@ public class TicketServiceImpl implements TicketService {
             }
             if (assignedTo != null) {
                 predicates.add(cb.equal(root.get("assignedTo").get("id"), assignedTo));
+            }
+            if (search != null && !search.trim().isEmpty()) {
+                String pattern = "%" + search.trim().toLowerCase() + "%";
+                Predicate titleMatch = cb.like(cb.lower(root.get("title")), pattern);
+                Predicate descMatch = cb.like(cb.lower(root.get("description")), pattern);
+                Predicate numberMatch = cb.like(cb.lower(root.get("ticketNumber")), pattern);
+                predicates.add(cb.or(titleMatch, descMatch, numberMatch));
             }
 
             return cb.and(predicates.toArray(new Predicate[0]));
