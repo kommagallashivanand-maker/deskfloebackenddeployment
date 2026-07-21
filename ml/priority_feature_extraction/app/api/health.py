@@ -6,4 +6,8 @@ router = APIRouter()
 
 @router.get("/health")
 def health_check():
-    return {"status": "ok", "app": settings.app_name}
+    try:
+        app_name = settings.app_name
+    except AttributeError:
+        app_name = "unknown"
+    return {"status": "ok", "app": app_name}
