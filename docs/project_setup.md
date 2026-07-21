@@ -89,34 +89,69 @@ API_KEY=<your-local-api-key>
 
 ---
 
-## 4. Install Dependencies
+4. Install Dependencies
+Python
+pip install -r requirements.txt
 
-```bash
-npm install
-```
+Whenever new Python dependencies are added:
 
-When dependencies change, commit the updated:
+Update requirements.txt
+Commit the updated file with your code changes
+FastAPI
 
-* `package.json`
-* `package-lock.json`
+Install dependencies:
 
----
+pip install -r requirements.txt
 
-## 5. Run the Application
+If required, install FastAPI and Uvicorn:
 
-### Locally
+pip install fastapi uvicorn
+Java
 
-For Vite:
+For Maven projects:
 
-```bash
-npm run dev
-```
+mvn clean install
 
-For Create React App:
+For Gradle projects:
 
-```bash
-npm start
-```
+./gradlew build
+
+On Windows:
+
+gradlew.bat build
+5. Run the Application Locally
+Python
+python <filename>.py
+
+Example:
+
+python app.py
+FastAPI
+uvicorn main:app --reload
+
+Where:
+
+main = Python filename (main.py)
+app = FastAPI application object
+Java
+
+For a simple Java application:
+
+javac Main.java
+java Main
+
+For a Maven Spring Boot application:
+
+mvn spring-boot:run
+
+For a Gradle Spring Boot application:
+
+./gradlew bootRun
+
+On Windows:
+
+gradlew.bat bootRun
+
 
 ### Using Docker Compose
 
