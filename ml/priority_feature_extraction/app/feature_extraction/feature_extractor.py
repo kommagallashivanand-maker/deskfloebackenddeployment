@@ -16,7 +16,7 @@ def extract_features(ticket: TicketIn, auth: AuthContext, top_k: int = None) -> 
     sentiment = Sentiment(label=label, score=score)
     description_length = len(ticket.description or "")
     return FeatureOut(
-        keywords=keywords,
+        keywords=", ".join(keywords),
         category=category,
         requester_role=requester_role,
         sentiment=sentiment,

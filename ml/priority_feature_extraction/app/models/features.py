@@ -8,7 +8,7 @@ class Sentiment(BaseModel):
 
 
 class FeatureOut(BaseModel):
-    keywords: List[str]
+    keywords: str
     category: str
     requester_role: str
     sentiment: Sentiment
