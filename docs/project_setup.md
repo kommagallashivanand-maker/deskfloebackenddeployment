@@ -45,7 +45,7 @@ powershell -ExecutionPolicy Bypass -File .\setup.ps1
 Verify:
 
 ```bash
-git config core.hooksPath
+git config core.hooksPath .githooks
 ```
 
 Expected:
