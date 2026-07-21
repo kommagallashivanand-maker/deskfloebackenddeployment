@@ -51,6 +51,7 @@ public class TicketController {
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
+
     @GetMapping("/{id}")
     @Operation(
         summary = "Get a ticket by ID", 
