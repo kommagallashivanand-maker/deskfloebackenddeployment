@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import pathlib
 import re
 from typing import List, Optional, Sequence
 
@@ -10,20 +12,50 @@ from .preprocessing import normalize_text
 
 logger = get_logger(__name__)
 
-ACRONYMS = {
-    "vpn",
-    "mfa",
-    "sql",
-    "api",
-    "dns",
-    "cpu",
-    "ram",
-    "outlook",
-    "active directory",
-    "ad",
-    "sso",
-    "ip",
+# ---------------------------------------------------------------------------
+# Domain acronym list — loaded from config-driven JSON file at startup.
+# Protects lowercase short tokens (e.g. "ip", "ad", "sso") from being
+# dropped by the len <= 2 filter in _is_valid_token.
+# Uppercase tokens (e.g. "AWS", "TLS") are handled automatically by the
+# isupper() heuristic and do not need to be in this list.
+# ---------------------------------------------------------------------------
+
+_ACRONYMS_FALLBACK = {
+    "vpn", "mfa", "sql", "api", "dns", "cpu", "ram",
+    "outlook", "active directory", "ad", "sso", "ip",
 }
+
+
+def _load_domain_acronyms() -> set:
+    """Load domain acronyms from the configured JSON file.
+
+    Falls back to the built-in set if the file is missing or malformed,
+    so the service always starts successfully.
+    """
+    path = pathlib.Path(settings.domain_acronyms_path)
+    if not path.is_absolute():
+        # Resolve relative to the package root (two levels up from this file)
+        path = pathlib.Path(__file__).resolve().parent.parent.parent / path
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, list):
+            raise ValueError("domain_acronyms.json must contain a JSON array")
+        acronyms = {str(item).strip().lower() for item in data}
+        logger.info("Loaded %d domain acronyms from %s", len(acronyms), path)
+        return acronyms
+    except FileNotFoundError:
+        logger.warning(
+            "domain_acronyms.json not found at '%s'. Using built-in fallback list.", path
+        )
+    except Exception:
+        logger.exception(
+            "Failed to load domain_acronyms.json from '%s'. Using built-in fallback list.", path
+        )
+    return _ACRONYMS_FALLBACK
+
+
+ACRONYMS: set = _load_domain_acronyms()
 
 STOP_TOKENS = {
     "the", "and", "for", "with", "from", "that", "this", "a", "an", "of", "in", "on",
@@ -69,14 +101,26 @@ def _candidate_key(candidate: str) -> str:
 
 
 def _is_valid_token(token_text: str) -> bool:
-    """Return true for tokens that are meaningful and not too short."""
+    """Return true for tokens that are meaningful and not too short.
+
+    Short-token rules (len <= 2):
+    - Uppercase tokens (e.g. "AWS", "IP") pass automatically via the
+      isupper() heuristic — no list entry needed.
+    - Lowercase tokens pass only if present in the config-driven ACRONYMS
+      set (e.g. "ip", "ad", "sso").
+    """
     if not token_text:
         return False
     normalized = token_text.strip().lower()
     if normalized in STOP_TOKENS:
         return False
-    if len(normalized) <= 2 and normalized not in ACRONYMS:
-        return False
+    if len(normalized) <= 2:
+        # Let all-uppercase tokens through automatically (e.g. "IP", "AD")
+        if token_text.strip().isupper():
+            return True
+        # For lowercase short tokens, require an explicit entry in ACRONYMS
+        if normalized not in ACRONYMS:
+            return False
     return True
 
 

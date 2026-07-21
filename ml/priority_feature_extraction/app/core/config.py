@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     sentiment_positive_thresh: float = 0.25
     category_mapping_path: str = "sample_data/category_mapping.json"
     use_category_mapping: bool = False
+    domain_acronyms_path: str = "sample_data/domain_acronyms.json"
 
     model_config = SettingsConfigDict(
         env_file=".env",
