@@ -40,9 +40,14 @@ MODELS_DIR = SCRIPT_DIR / "models"
 
 # Feature column groups
 TEXT_FEATURES = ["keywords"]
-CATEGORICAL_FEATURES = ["category", "sentiment_label"]
+CATEGORICAL_FEATURES_FIXED = ["category", "sentiment_label"]
+# requester_role is populated from the live JWT at request time. In synthetic/
+# early training data it may be constant (e.g. "unknown") since there's no
+# real authenticated session behind these tickets. Rather than hardcoding its
+# exclusion, it's treated as a candidate and only included if it actually
+# varies in the current data — see detect_active_categorical_features().
+CATEGORICAL_FEATURES_CANDIDATE = ["requester_role"]
 NUMERICAL_FEATURES = ["sentiment_score", "description_length"]
-DROPPED_FEATURES = ["requester_role"]           # constant across all rows
 TARGET = "priority"
 ID_COLUMN = "ticket_id"
 
@@ -65,7 +70,10 @@ def load_data(path: pathlib.Path) -> pd.DataFrame:
         sys.exit(1)
 
     df = pd.read_csv(path)
-    required_cols = [ID_COLUMN, TARGET] + TEXT_FEATURES + CATEGORICAL_FEATURES + NUMERICAL_FEATURES
+    # Only the fixed features are strictly required. Candidate features
+    # (like requester_role) are optional — their presence/variation is
+    # checked dynamically below.
+    required_cols = [ID_COLUMN, TARGET] + TEXT_FEATURES + CATEGORICAL_FEATURES_FIXED + NUMERICAL_FEATURES
     missing = set(required_cols) - set(df.columns)
     if missing:
         print(f"[ERROR] Missing columns in CSV: {missing}", file=sys.stderr)
@@ -87,7 +95,34 @@ def summarise_target(series: pd.Series) -> None:
     print()
 
 
-def build_preprocessor() -> ColumnTransformer:
+def detect_active_categorical_features(df: pd.DataFrame) -> list:
+    """Return the full categorical feature list, dynamically including any
+    candidate feature (e.g. requester_role) only if it actually has more
+    than one unique value in this training run.
+
+    requester_role is populated from the live JWT at request time and may
+    be constant (e.g. 'unknown') in synthetic/early training data where no
+    real authenticated session exists. Rather than hardcoding its exclusion,
+    this check re-evaluates it on every run, so it activates automatically
+    once real per-ticket role values exist in the data — no code change
+    needed at that point.
+    """
+    active = list(CATEGORICAL_FEATURES_FIXED)
+    for col in CATEGORICAL_FEATURES_CANDIDATE:
+        if col not in df.columns:
+            print(f"[INFO] '{col}' not present in data, skipping.")
+            continue
+        n_unique = df[col].nunique(dropna=False)
+        if n_unique > 1:
+            print(f"[INFO] '{col}' has {n_unique} unique values — including as a feature.")
+            active.append(col)
+        else:
+            only_value = df[col].iloc[0]
+            print(f"[INFO] '{col}' is constant ('{only_value}') across all rows — excluding this run.")
+    return active
+
+
+def build_preprocessor(categorical_features: list) -> ColumnTransformer:
     """Construct the column-wise preprocessing pipeline."""
     text_transformer = TfidfVectorizer(
         analyzer="word",
@@ -105,17 +140,17 @@ def build_preprocessor() -> ColumnTransformer:
     preprocessor = ColumnTransformer(
         transformers=[
             ("tfidf_keywords",  text_transformer,          "keywords"),
-            ("ohe_categoricals", categorical_transformer,  CATEGORICAL_FEATURES),
+            ("ohe_categoricals", categorical_transformer,  categorical_features),
             ("scaler_numericals", numerical_transformer,   NUMERICAL_FEATURES),
         ],
-        remainder="drop",   # silently drops ticket_id, requester_role, priority
+        remainder="drop",   # silently drops ticket_id, priority, and any unused candidate columns
     )
     return preprocessor
 
 
-def build_pipeline() -> Pipeline:
+def build_pipeline(categorical_features: list) -> Pipeline:
     """Assemble the full preprocessing + classifier pipeline."""
-    preprocessor = build_preprocessor()
+    preprocessor = build_preprocessor(categorical_features)
     classifier = RandomForestClassifier(
         n_estimators=300,
         class_weight="balanced",
@@ -180,23 +215,27 @@ def main() -> None:
     df = load_data(DATA_PATH)
     summarise_target(df[TARGET])
 
-    # 2. Separate features and target
-    feature_cols = TEXT_FEATURES + CATEGORICAL_FEATURES + NUMERICAL_FEATURES
+    # 2. Determine which categorical features actually have signal this run
+    active_categorical = detect_active_categorical_features(df)
+    print(f"\n[INFO] Active categorical features this run: {active_categorical}\n")
+
+    # 3. Separate features and target
+    feature_cols = TEXT_FEATURES + active_categorical + NUMERICAL_FEATURES
     X = df[feature_cols]
     y = df[TARGET]
 
-    # 3. Build pipeline
-    pipeline = build_pipeline()
+    # 4. Build pipeline
+    pipeline = build_pipeline(active_categorical)
 
-    # 4. Stratified cross-validation (evaluation only — does not fit the final model)
+    # 5. Stratified cross-validation (evaluation only — does not fit the final model)
     run_cross_validation(pipeline, X, y)
 
-    # 5. Final training on full dataset
+    # 6. Final training on full dataset
     print("[INFO] Training final model on full dataset ...")
     pipeline.fit(X, y)
     print("[INFO] Training complete.")
 
-    # 6. Save versioned + latest artifacts
+    # 7. Save versioned + latest artifacts
     save_artifacts(pipeline)
 
     print("\n[DONE] All steps completed successfully.\n")
