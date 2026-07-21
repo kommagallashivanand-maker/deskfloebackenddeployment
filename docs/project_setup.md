@@ -48,10 +48,10 @@ Verify:
 git config core.hooksPath .githooks
 ```
 
-Expected:
+Expected output :
 
 ```text
-.githooks
+.githooks  or  no output without any error
 ```
 
 ---
