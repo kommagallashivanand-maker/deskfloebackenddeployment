@@ -95,7 +95,7 @@ for file in $STAGED_FILES; do
     # Skip binary/lock files
     case "$file" in
         *.png|*.jpg|*.jpeg|*.gif|*.ico|*.svg|*.woff|*.woff2|*.ttf|*.eot|*.otf) continue ;;
-        *.zip|*.tar|*.gz|*.rar|*.7z|*.pdf|*.lock) continue ;;
+        *.zip|*.tar|*.gz|*.rar|*.7z|*.pdf|*.lock|package-lock.json|yarn.lock|pnpm-lock.yaml) continue ;;
     esac
 
     content=$(git show ":$file" 2>/dev/null)
