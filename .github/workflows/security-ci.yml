@@ -1,8 +1,3 @@
-# ──────────────────────────────────────────────────────────────────────────────
-# Security CI Pipeline
-# Triggers: push to feature/DF_83_Quality_gates_in_CI or staging | PR to staging
-# Scans ONLY the commits introduced by the triggering event
-# ──────────────────────────────────────────────────────────────────────────────
 name: Security CI
 
 on:
@@ -21,17 +16,14 @@ env:
   COV_THRESHOLD: "80"
 
 jobs:
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 1 – Detect project type and commit range
-# ══════════════════════════════════════════════════════════════════════════════
   detect:
     name: Detect Project and Commit Range
     runs-on: ubuntu-latest
     outputs:
       project_type: ${{ steps.detect.outputs.project_type }}
       commit_range: ${{ steps.range.outputs.commit_range }}
-      base_sha:     ${{ steps.range.outputs.base_sha }}
-      head_sha:     ${{ steps.range.outputs.head_sha }}
+      base_sha: ${{ steps.range.outputs.base_sha }}
+      head_sha: ${{ steps.range.outputs.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,9 +39,9 @@ jobs:
             BASE="${{ github.event.before }}"
             HEAD="${{ github.sha }}"
           fi
-          echo "base_sha=${BASE}"               >> "$GITHUB_OUTPUT"
-          echo "head_sha=${HEAD}"               >> "$GITHUB_OUTPUT"
-          echo "commit_range=${BASE}..${HEAD}"  >> "$GITHUB_OUTPUT"
+          echo "base_sha=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD}" >> "$GITHUB_OUTPUT"
+          echo "commit_range=${BASE}..${HEAD}" >> "$GITHUB_OUTPUT"
 
       - name: Detect project type
         id: detect
@@ -76,17 +68,14 @@ jobs:
           echo "project_type=${TYPE}" >> "$GITHUB_OUTPUT"
           echo "Detected: ${TYPE}"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 2 – Tests and Coverage (Python)
-# ══════════════════════════════════════════════════════════════════════════════
   test-python:
     name: Tests and Coverage (Python)
     needs: detect
     if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
     runs-on: ubuntu-latest
     outputs:
-      tests_ran:       ${{ steps.run-tests.outputs.tests_ran }}
-      coverage_pct:    ${{ steps.run-tests.outputs.coverage_pct }}
+      tests_ran: ${{ steps.run-tests.outputs.tests_ran }}
+      coverage_pct: ${{ steps.run-tests.outputs.coverage_pct }}
       coverage_status: ${{ steps.run-tests.outputs.coverage_status }}
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +118,7 @@ jobs:
         run: |
           PYDIR="${{ steps.pydir.outputs.pydir }}"
           if find "$PYDIR" \( -type d -name "tests" -o -name "test_*.py" \) | grep -q .; then
-            echo "found=true"  >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
@@ -156,8 +145,8 @@ jobs:
             EXIT_CODE=$?
             set -e
             PCT=$(python3 -c "import xml.etree.ElementTree as ET; r=ET.parse('$ABS_REPORTS/coverage.xml').getroot(); print(round(float(r.attrib.get('line-rate','0'))*100,2))" 2>/dev/null || echo "0")
-            echo "coverage_pct=${PCT}"    >> "$GITHUB_OUTPUT"
-            echo "tests_ran=true"         >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${PCT}" >> "$GITHUB_OUTPUT"
+            echo "tests_ran=true" >> "$GITHUB_OUTPUT"
             if [ "$EXIT_CODE" -eq 0 ]; then
               echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
             else
@@ -165,32 +154,29 @@ jobs:
               exit "$EXIT_CODE"
             fi
           else
-            echo "tests_ran=false"          >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=N/A"         >> "$GITHUB_OUTPUT"
-            echo "coverage_status=SKIPPED"  >> "$GITHUB_OUTPUT"
+            echo "tests_ran=false" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
+            echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload coverage report
         if: steps.has-tests.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
-            name: coverage-report
-            path: |
-                    security-reports/coverage.xml
-                    security-reports/coverage.json
-                    security-reports/pytest-output.txt
+          name: coverage-report
+          path: |
+            security-reports/coverage.xml
+            security-reports/coverage.json
+            security-reports/pytest-output.txt
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 3 – Tests and Coverage (Java)
-# ══════════════════════════════════════════════════════════════════════════════
   test-java:
     name: Tests and Coverage (Java)
     needs: detect
     if: needs.detect.outputs.project_type == 'java'
     runs-on: ubuntu-latest
     outputs:
-      tests_ran:       ${{ steps.results.outputs.tests_ran }}
-      coverage_pct:    ${{ steps.results.outputs.coverage_pct }}
+      tests_ran: ${{ steps.results.outputs.tests_ran }}
+      coverage_pct: ${{ steps.results.outputs.coverage_pct }}
       coverage_status: ${{ steps.results.outputs.coverage_status }}
     steps:
       - uses: actions/checkout@v4
@@ -213,7 +199,7 @@ jobs:
             echo "tool=none" >> "$GITHUB_OUTPUT"
           fi
           if find . -path "*/src/test/java/*.java" | grep -q . || find . \( -name "*Test.java" -o -name "*Tests.java" \) | grep -q .; then
-            echo "has_tests=true"  >> "$GITHUB_OUTPUT"
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_tests=false" >> "$GITHUB_OUTPUT"
           fi
@@ -241,7 +227,7 @@ jobs:
               echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "coverage_pct=N/A"        >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
             echo "coverage_status=UNKNOWN" >> "$GITHUB_OUTPUT"
           fi
           echo "tests_ran=true" >> "$GITHUB_OUTPUT"
@@ -260,8 +246,8 @@ jobs:
           set -e
           JACOCO=$(find . -name "jacocoTestReport.xml" | head -1)
           if [ -n "$JACOCO" ]; then cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"; fi
-          echo "tests_ran=true"       >> "$GITHUB_OUTPUT"
-          echo "coverage_pct=N/A"     >> "$GITHUB_OUTPUT"
+          echo "tests_ran=true" >> "$GITHUB_OUTPUT"
+          echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
           echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
           exit "$EXIT_CODE"
 
@@ -269,16 +255,16 @@ jobs:
         id: results
         run: |
           if [ "${{ steps.java-detect.outputs.has_tests }}" = "false" ]; then
-            echo "tests_ran=false"         >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=N/A"        >> "$GITHUB_OUTPUT"
+            echo "tests_ran=false" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
             echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
           elif [ "${{ steps.java-detect.outputs.tool }}" = "maven" ]; then
-            echo "tests_ran=${{ steps.maven.outputs.tests_ran }}"             >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=${{ steps.maven.outputs.coverage_pct }}"       >> "$GITHUB_OUTPUT"
+            echo "tests_ran=${{ steps.maven.outputs.tests_ran }}" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${{ steps.maven.outputs.coverage_pct }}" >> "$GITHUB_OUTPUT"
             echo "coverage_status=${{ steps.maven.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tests_ran=${{ steps.gradle.outputs.tests_ran }}"             >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=${{ steps.gradle.outputs.coverage_pct }}"       >> "$GITHUB_OUTPUT"
+            echo "tests_ran=${{ steps.gradle.outputs.tests_ran }}" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${{ steps.gradle.outputs.coverage_pct }}" >> "$GITHUB_OUTPUT"
             echo "coverage_status=${{ steps.gradle.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
           fi
 
@@ -290,18 +276,15 @@ jobs:
           path: security-reports/jacoco.xml
           if-no-files-found: ignore
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 4 – Dependency Audit
-# ══════════════════════════════════════════════════════════════════════════════
   dependency-audit:
     name: Dependency Audit
     needs: detect
     runs-on: ubuntu-latest
     outputs:
-      tool:          ${{ steps.audit.outputs.tool }}
-      total_vulns:   ${{ steps.audit.outputs.total_vulns }}
+      tool: ${{ steps.audit.outputs.tool }}
+      total_vulns: ${{ steps.audit.outputs.total_vulns }}
       critical_high: ${{ steps.audit.outputs.critical_high }}
-      audit_status:  ${{ steps.audit.outputs.audit_status }}
+      audit_status: ${{ steps.audit.outputs.audit_status }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -355,15 +338,15 @@ jobs:
         id: audit
         run: |
           if [ -n "${{ steps.pip-audit.outputs.tool }}" ]; then
-            echo "tool=${{ steps.pip-audit.outputs.tool }}"                   >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}"     >> "$GITHUB_OUTPUT"
+            echo "tool=${{ steps.pip-audit.outputs.tool }}" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
             echo "critical_high=${{ steps.pip-audit.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}"   >> "$GITHUB_OUTPUT"
+            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tool=${{ steps.trivy.outputs.tool }}"                   >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.trivy.outputs.total_vulns }}"     >> "$GITHUB_OUTPUT"
+            echo "tool=${{ steps.trivy.outputs.tool }}" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=${{ steps.trivy.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
             echo "critical_high=${{ steps.trivy.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.trivy.outputs.audit_status }}"   >> "$GITHUB_OUTPUT"
+            echo "audit_status=${{ steps.trivy.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Fail on high or critical vulnerabilities
@@ -377,140 +360,132 @@ jobs:
           path: security-reports/dependency-audit.json
           if-no-files-found: ignore
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 5 – SAST (Semgrep)
-# ══════════════════════════════════════════════════════════════════════════════
-sast:
-  name: SAST Semgrep
-  needs: detect
-  runs-on: ubuntu-latest
+  sast:
+    name: SAST Semgrep
+    needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
+      sast_status: ${{ steps.semgrep.outputs.sast_status }}
+      severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-  outputs:
-    semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
-    sast_status: ${{ steps.semgrep.outputs.sast_status }}
-    severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
+      - name: Install Semgrep
+        run: pip install semgrep
 
-  steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
+      - name: Resolve changed files
+        id: changed
+        run: |
+          BASE="${{ needs.detect.outputs.base_sha }}"
+          HEAD="${{ needs.detect.outputs.head_sha }}"
 
-    - name: Install Semgrep
-      run: pip install semgrep
+          git fetch origin "$BASE" 2>/dev/null || true
 
-    - name: Resolve changed files
-      id: changed
-      run: |
-        BASE="${{ needs.detect.outputs.base_sha }}"
-        HEAD="${{ needs.detect.outputs.head_sha }}"
+          FILES=$(git diff --name-only "$BASE" "$HEAD" \
+            | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' \
+            | tr '\n' ' ')
 
-        git fetch origin "$BASE" 2>/dev/null || true
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
 
-        FILES=$(git diff --name-only "$BASE" "$HEAD" \
-          | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' \
-          | tr '\n' ' ')
+      - name: Run Semgrep
+        id: semgrep
+        env:
+          REPORTS_DIR: security-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
 
-        echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          FILES="${{ steps.changed.outputs.files }}"
+          SCAN_TARGET="${FILES:-.}"
 
-    - name: Run Semgrep
-      id: semgrep
-      env:
-        REPORTS_DIR: security-reports
-      run: |
-        mkdir -p "$REPORTS_DIR"
+          semgrep \
+            --config=auto \
+            --json \
+            --output "$REPORTS_DIR/semgrep-report.json" \
+            $SCAN_TARGET
 
-        FILES="${{ steps.changed.outputs.files }}"
-        SCAN_TARGET="${FILES:-.}"
+          python3 <<'EOF'
+          import json
+          import os
 
-        semgrep \
-          --config=auto \
-          --json \
-          --output "$REPORTS_DIR/semgrep-report.json" \
-          $SCAN_TARGET
+          report = os.path.join(os.environ["REPORTS_DIR"], "semgrep-report.json")
 
-        python3 <<'EOF'
-        import json
-        import os
+          with open(report) as f:
+              data = json.load(f)
 
-        report = os.path.join(os.environ["REPORTS_DIR"], "semgrep-report.json")
+          results = data.get("results", [])
 
-        with open(report) as f:
-            data = json.load(f)
+          severity_count = {}
 
-        results = data.get("results", [])
+          for r in results:
+              sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
+              severity_count[sev] = severity_count.get(sev, 0) + 1
 
-        severity_count = {}
+          status = "FAIL" if severity_count.get("ERROR", 0) > 0 else "PASS"
 
-        for r in results:
-            sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
-            severity_count[sev] = severity_count.get(sev, 0) + 1
+          summary = ", ".join(
+              f"{k}:{v}" for k, v in severity_count.items()
+          ) or "none"
 
-        status = "FAIL" if severity_count.get("ERROR", 0) > 0 else "PASS"
+          report_txt = os.path.join(
+              os.environ["REPORTS_DIR"],
+              "semgrep_report(SAST).txt"
+          )
 
-        summary = ", ".join(
-            f"{k}:{v}" for k, v in severity_count.items()
-        ) or "none"
+          with open(report_txt, "w") as out:
 
-        report_txt = os.path.join(
-            os.environ["REPORTS_DIR"],
-            "semgrep_report(SAST).txt"
-        )
+              out.write("=" * 70 + "\n")
+              out.write("                 SEMGREP SAST REPORT\n")
+              out.write("=" * 70 + "\n\n")
 
-        with open(report_txt, "w") as out:
+              out.write(f"Overall Status : {status}\n")
+              out.write(f"Total Findings : {len(results)}\n")
+              out.write(f"Severity Summary : {summary}\n\n")
 
-            out.write("=" * 70 + "\n")
-            out.write("                 SEMGREP SAST REPORT\n")
-            out.write("=" * 70 + "\n\n")
+              if not results:
+                  out.write("No security issues detected.\n")
 
-            out.write(f"Overall Status : {status}\n")
-            out.write(f"Total Findings : {len(results)}\n")
-            out.write(f"Severity Summary : {summary}\n\n")
+              for i, r in enumerate(results, 1):
 
-            if not results:
-                out.write("No security issues detected.\n")
+                  out.write("-" * 70 + "\n")
+                  out.write(f"Issue #{i}\n")
+                  out.write("-" * 70 + "\n")
 
-            for i, r in enumerate(results, 1):
+                  out.write(f"Rule ID  : {r.get('check_id')}\n")
+                  out.write(f"Severity : {r.get('extra', {}).get('severity')}\n")
+                  out.write(f"Message  : {r.get('extra', {}).get('message')}\n")
+                  out.write(f"File     : {r.get('path')}\n")
+                  out.write(f"Line     : {r.get('start', {}).get('line')}\n")
 
-                out.write("-" * 70 + "\n")
-                out.write(f"Issue #{i}\n")
-                out.write("-" * 70 + "\n")
+                  code = r.get("extra", {}).get("lines", "")
 
-                out.write(f"Rule ID  : {r.get('check_id')}\n")
-                out.write(f"Severity : {r.get('extra', {}).get('severity')}\n")
-                out.write(f"Message  : {r.get('extra', {}).get('message')}\n")
-                out.write(f"File     : {r.get('path')}\n")
-                out.write(f"Line     : {r.get('start', {}).get('line')}\n")
+                  if code:
+                      out.write("\nCode:\n")
+                      out.write(code + "\n")
 
-                code = r.get("extra", {}).get("lines", "")
+                  out.write("\n")
 
-                if code:
-                    out.write("\nCode:\n")
-                    out.write(code + "\n")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"semgrep_findings={len(results)}\n")
+              f.write(f"severity_summary={summary}\n")
+              f.write(f"sast_status={status}\n")
+          EOF
 
-                out.write("\n")
+      - name: Fail on high or critical SAST findings
+        if: steps.semgrep.outputs.sast_status == 'FAIL'
+        run: exit 1
 
-        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-            f.write(f"semgrep_findings={len(results)}\n")
-            f.write(f"severity_summary={summary}\n")
-            f.write(f"sast_status={status}\n")
-        EOF
+      - name: Upload Semgrep Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep_report(SAST)
+          path: |
+            security-reports/semgrep-report.json
+            security-reports/semgrep_report(SAST).txt
 
-    - name: Fail on high or critical SAST findings
-      if: steps.semgrep.outputs.sast_status == 'FAIL'
-      run: exit 1
-
-    - name: Upload Semgrep Report
-      uses: actions/upload-artifact@v4
-      with:
-        name: semgrep_report(SAST)
-        path: |
-          security-reports/semgrep-report.json
-          security-reports/semgrep_report(SAST).txt
-
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 6 – Secret Detection (Gitleaks)
-# ══════════════════════════════════════════════════════════════════════════════
-secret-scan:
+  secret-scan:
     name: Secret Detection Gitleaks
     needs: detect
     runs-on: ubuntu-latest
@@ -557,9 +532,6 @@ secret-scan:
           path: security-reports/gitleaks-report.json
           if-no-files-found: ignore
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JOB 7 – Generate PDF Security Report
-# ══════════════════════════════════════════════════════════════════════════════
   report:
     name: Generate Security Report
     needs: [detect, test-python, test-java, dependency-audit, sast, secret-scan]
@@ -583,21 +555,21 @@ secret-scan:
 
       - name: Generate PDF report
         env:
-          PROJECT_TYPE:     ${{ needs.detect.outputs.project_type }}
-          COMMIT_RANGE:     ${{ needs.detect.outputs.commit_range }}
-          TESTS_RAN:        ${{ needs.test-python.outputs.tests_ran || needs.test-java.outputs.tests_ran }}
-          COVERAGE_PCT:     ${{ needs.test-python.outputs.coverage_pct || needs.test-java.outputs.coverage_pct }}
-          COVERAGE_STATUS:  ${{ needs.test-python.outputs.coverage_status || needs.test-java.outputs.coverage_status }}
-          AUDIT_TOOL:       ${{ needs.dependency-audit.outputs.tool }}
-          TOTAL_VULNS:      ${{ needs.dependency-audit.outputs.total_vulns }}
-          CRITICAL_HIGH:    ${{ needs.dependency-audit.outputs.critical_high }}
-          AUDIT_STATUS:     ${{ needs.dependency-audit.outputs.audit_status }}
+          PROJECT_TYPE: ${{ needs.detect.outputs.project_type }}
+          COMMIT_RANGE: ${{ needs.detect.outputs.commit_range }}
+          TESTS_RAN: ${{ needs.test-python.outputs.tests_ran || needs.test-java.outputs.tests_ran }}
+          COVERAGE_PCT: ${{ needs.test-python.outputs.coverage_pct || needs.test-java.outputs.coverage_pct }}
+          COVERAGE_STATUS: ${{ needs.test-python.outputs.coverage_status || needs.test-java.outputs.coverage_status }}
+          AUDIT_TOOL: ${{ needs.dependency-audit.outputs.tool }}
+          TOTAL_VULNS: ${{ needs.dependency-audit.outputs.total_vulns }}
+          CRITICAL_HIGH: ${{ needs.dependency-audit.outputs.critical_high }}
+          AUDIT_STATUS: ${{ needs.dependency-audit.outputs.audit_status }}
           SEMGREP_FINDINGS: ${{ needs.sast.outputs.semgrep_findings }}
           SEVERITY_SUMMARY: ${{ needs.sast.outputs.severity_summary }}
-          SAST_STATUS:      ${{ needs.sast.outputs.sast_status }}
-          SECRETS_FOUND:    ${{ needs.secret-scan.outputs.secrets_found }}
-          SECRET_STATUS:    ${{ needs.secret-scan.outputs.secret_status }}
-          COV_THRESHOLD:    ${{ env.COV_THRESHOLD }}
+          SAST_STATUS: ${{ needs.sast.outputs.sast_status }}
+          SECRETS_FOUND: ${{ needs.secret-scan.outputs.secrets_found }}
+          SECRET_STATUS: ${{ needs.secret-scan.outputs.secret_status }}
+          COV_THRESHOLD: ${{ env.COV_THRESHOLD }}
         run: python3 .github/scripts/gen_security_report.py
 
       - name: Upload security report PDF
