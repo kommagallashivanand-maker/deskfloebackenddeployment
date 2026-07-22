@@ -1,7 +1,7 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Security CI Pipeline
-# Triggers: push → feature/DF_83_Quality_gates_in_CI / staging | PR → staging
-# Scans ONLY commits introduced by the triggering event (no full-history scans)
+# Triggers: push to feature/DF_83_Quality_gates_in_CI or staging | PR to staging
+# Scans ONLY the commits introduced by the triggering event
 # ──────────────────────────────────────────────────────────────────────────────
 name: Security CI
 
@@ -15,14 +15,14 @@ on:
       - staging
 
 env:
-  COVERAGE_THRESHOLD: "60"
   PYTHON_VERSION: "3.11"
   JAVA_VERSION: "17"
   REPORTS_DIR: security-reports
+  COV_THRESHOLD: "60"
 
 jobs:
 # ══════════════════════════════════════════════════════════════════════════════
-# JOB 1 – Detect project type & commit range
+# JOB 1 – Detect project type and commit range
 # ══════════════════════════════════════════════════════════════════════════════
   detect:
     name: Detect Project and Commit Range
@@ -47,17 +47,15 @@ jobs:
             BASE="${{ github.event.before }}"
             HEAD="${{ github.sha }}"
           fi
-          echo "base_sha=$BASE"              >> "$GITHUB_OUTPUT"
-          echo "head_sha=$HEAD"              >> "$GITHUB_OUTPUT"
-          echo "commit_range=${BASE}..${HEAD}" >> "$GITHUB_OUTPUT"
-          echo "Commit range: ${BASE}..${HEAD}"
+          echo "base_sha=${BASE}"               >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD}"               >> "$GITHUB_OUTPUT"
+          echo "commit_range=${BASE}..${HEAD}"  >> "$GITHUB_OUTPUT"
 
       - name: Detect project type
         id: detect
         run: |
           TYPE="unknown"
-          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || \
-             [ -f "Pipfile" ] || [ -f "setup.py" ]; then
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ] || [ -f "setup.py" ]; then
             if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null; then
               TYPE="fastapi"
             else
@@ -70,23 +68,16 @@ jobs:
           if [ "$TYPE" = "unknown" ]; then
             PYFILE=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) | head -1)
             if [ -n "$PYFILE" ]; then
-              if grep -qiE "fastapi" "$PYFILE" 2>/dev/null; then
-                TYPE="fastapi"
-              else
-                TYPE="python-ml"
-              fi
+              if grep -qiE "fastapi" "$PYFILE" 2>/dev/null; then TYPE="fastapi"; else TYPE="python-ml"; fi
             fi
-            JAVAFILE=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) | head -1)
-            if [ -n "$JAVAFILE" ]; then
-              TYPE="java"
-            fi
+            JFILE=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) | head -1)
+            if [ -n "$JFILE" ]; then TYPE="java"; fi
           fi
-          echo "project_type=$TYPE" >> "$GITHUB_OUTPUT"
-          echo "Detected project type: $TYPE"
-
+          echo "project_type=${TYPE}" >> "$GITHUB_OUTPUT"
+          echo "Detected: ${TYPE}"
 
 # ══════════════════════════════════════════════════════════════════════════════
-# JOB 2 – Tests & Coverage (Python ML / FastAPI)
+# JOB 2 – Tests and Coverage (Python)
 # ══════════════════════════════════════════════════════════════════════════════
   test-python:
     name: Tests and Coverage (Python)
@@ -102,59 +93,45 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
       - name: Detect Python project directory
-        id: detect-pydir
+        id: pydir
         run: |
           PYDIR=""
-          while IFS= read -r d; do
-            if find "$d" -maxdepth 2 -type d -name "tests" | grep -q . || \
-               find "$d" -maxdepth 2 -name "test_*.py" | grep -q .; then
-              PYDIR="$d"
-              break
+          for d in $(find . -type f \( -name "requirements.txt" -o -name "pyproject.toml" \) -exec dirname {} \; | sort -u); do
+            if find "$d" -maxdepth 2 \( -type d -name "tests" -o -name "test_*.py" \) | grep -q .; then
+              PYDIR="$d"; break
             fi
-          done < <(find . -type f \( -name "requirements.txt" -o -name "pyproject.toml" \) \
-                   -exec dirname {} \; | sort -u)
+          done
           if [ -z "$PYDIR" ]; then
             PYDIR=$(find . -name "requirements.txt" -exec dirname {} \; | sort | head -1)
           fi
           PYDIR="${PYDIR:-.}"
-          echo "pydir=$PYDIR" >> "$GITHUB_OUTPUT"
-          echo "Python project directory: $PYDIR"
+          echo "pydir=${PYDIR}" >> "$GITHUB_OUTPUT"
+          echo "Project dir: ${PYDIR}"
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-          find . -name requirements.txt -not -path "./requirements.txt" \
-            -exec pip install -r {} \;
-          if [ -f pyproject.toml ]; then
-            pip install -e . || true
-          fi
-          PYDIR="${{ steps.detect-pydir.outputs.pydir }}"
-          if [ "$PYDIR" != "." ] && [ -f "$PYDIR/pyproject.toml" ]; then
-            pip install -e "$PYDIR" || true
-          fi
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          find . -name requirements.txt -not -path "./requirements.txt" -exec pip install -r {} \;
+          if [ -f pyproject.toml ]; then pip install -e . || true; fi
+          PYDIR="${{ steps.pydir.outputs.pydir }}"
+          if [ "$PYDIR" != "." ] && [ -f "$PYDIR/pyproject.toml" ]; then pip install -e "$PYDIR" || true; fi
           pip install pytest pytest-cov pip-audit fastapi pydantic-settings httpx
 
-      - name: Detect test presence
-        id: detect-tests
+      - name: Detect tests
+        id: has-tests
         run: |
-          PYDIR="${{ steps.detect-pydir.outputs.pydir }}"
-          if find "$PYDIR" -type d -name "tests" | grep -q . || \
-             find "$PYDIR" -name "test_*.py" | grep -q .; then
-            echo "has_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests found in $PYDIR"
+          PYDIR="${{ steps.pydir.outputs.pydir }}"
+          if find "$PYDIR" \( -type d -name "tests" -o -name "test_*.py" \) | grep -q .; then
+            echo "found=true"  >> "$GITHUB_OUTPUT"
           else
-            echo "has_tests=false" >> "$GITHUB_OUTPUT"
-            echo "No tests found – skipping."
+            echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run pytest with coverage
@@ -162,12 +139,11 @@ jobs:
         env:
           REPORTS_DIR: security-reports
           COV_THRESHOLD: "60"
+          PYDIR: ${{ steps.pydir.outputs.pydir }}
+          HAS_TESTS: ${{ steps.has-tests.outputs.found }}
         run: |
           mkdir -p "$REPORTS_DIR"
           ABS_REPORTS="$(pwd)/$REPORTS_DIR"
-          PYDIR="${{ steps.detect-pydir.outputs.pydir }}"
-          HAS_TESTS="${{ steps.detect-tests.outputs.has_tests }}"
-
           if [ "$HAS_TESTS" = "true" ]; then
             set +e
             (cd "$PYDIR" && python -m pytest \
@@ -178,20 +154,8 @@ jobs:
               -q 2>&1 | tee "$ABS_REPORTS/pytest-output.txt")
             EXIT_CODE=$?
             set -e
-
-            cat > /tmp/parse_cov.py << 'SCRIPT'
-import xml.etree.ElementTree as ET
-import sys
-import os
-try:
-    root = ET.parse(sys.argv[1]).getroot()
-    pct = round(float(root.attrib.get("line-rate", "0")) * 100, 2)
-    print(pct)
-except Exception:
-    print("0")
-SCRIPT
-            PCT=$(python3 /tmp/parse_cov.py "$ABS_REPORTS/coverage.xml")
-            echo "coverage_pct=$PCT"      >> "$GITHUB_OUTPUT"
+            PCT=$(python3 -c "import xml.etree.ElementTree as ET; r=ET.parse('$ABS_REPORTS/coverage.xml').getroot(); print(round(float(r.attrib.get('line-rate','0'))*100,2))" 2>/dev/null || echo "0")
+            echo "coverage_pct=${PCT}"    >> "$GITHUB_OUTPUT"
             echo "tests_ran=true"         >> "$GITHUB_OUTPUT"
             if [ "$EXIT_CODE" -eq 0 ]; then
               echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
@@ -206,15 +170,14 @@ SCRIPT
           fi
 
       - name: Upload coverage report
-        if: steps.detect-tests.outputs.has_tests == 'true'
+        if: steps.has-tests.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: security-reports/coverage.xml
 
-
 # ══════════════════════════════════════════════════════════════════════════════
-# JOB 3 – Tests & Coverage (Java)
+# JOB 3 – Tests and Coverage (Java)
 # ══════════════════════════════════════════════════════════════════════════════
   test-java:
     name: Tests and Coverage (Java)
@@ -230,32 +193,30 @@ SCRIPT
         with:
           fetch-depth: 0
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
 
       - name: Detect build tool and tests
-        id: detect-java
+        id: java-detect
         run: |
           if [ -f "pom.xml" ]; then
-            echo "build_tool=maven" >> "$GITHUB_OUTPUT"
+            echo "tool=maven" >> "$GITHUB_OUTPUT"
           elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
-            echo "build_tool=gradle" >> "$GITHUB_OUTPUT"
+            echo "tool=gradle" >> "$GITHUB_OUTPUT"
           else
-            echo "build_tool=none" >> "$GITHUB_OUTPUT"
+            echo "tool=none" >> "$GITHUB_OUTPUT"
           fi
-          if find . -path "*/src/test/java/*.java" | grep -q . || \
-             find . \( -name "*Test.java" -o -name "*Tests.java" \) | grep -q .; then
-            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+          if find . -path "*/src/test/java/*.java" | grep -q . || find . \( -name "*Test.java" -o -name "*Tests.java" \) | grep -q .; then
+            echo "has_tests=true"  >> "$GITHUB_OUTPUT"
           else
             echo "has_tests=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run Maven tests with JaCoCo
-        id: maven-tests
-        if: steps.detect-java.outputs.has_tests == 'true' && steps.detect-java.outputs.build_tool == 'maven'
+      - name: Run Maven tests
+        id: maven
+        if: steps.java-detect.outputs.has_tests == 'true' && steps.java-detect.outputs.tool == 'maven'
         env:
           REPORTS_DIR: security-reports
           COV_THRESHOLD: "60"
@@ -268,24 +229,10 @@ SCRIPT
           JACOCO=$(find . -name "jacoco.xml" | head -1)
           if [ -n "$JACOCO" ]; then
             cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"
-            cat > /tmp/parse_jacoco.py << 'SCRIPT'
-import xml.etree.ElementTree as ET
-import sys
-try:
-    root = ET.parse(sys.argv[1]).getroot()
-    node = root.find('.//counter[@type="LINE"]')
-    missed  = int(node.get("missed", 0))
-    covered = int(node.get("covered", 0))
-    total   = missed + covered
-    print(round(covered / total * 100, 2) if total else 0)
-except Exception:
-    print("0")
-SCRIPT
-            PCT=$(python3 /tmp/parse_jacoco.py "$REPORTS_DIR/jacoco.xml")
-            echo "coverage_pct=$PCT"   >> "$GITHUB_OUTPUT"
+            PCT=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('$REPORTS_DIR/jacoco.xml').getroot(); node=root.find('.//counter[@type=\"LINE\"]'); missed=int(node.get('missed',0)); covered=int(node.get('covered',0)); total=missed+covered; print(round(covered/total*100,2) if total else 0)" 2>/dev/null || echo "0")
+            echo "coverage_pct=${PCT}" >> "$GITHUB_OUTPUT"
             if awk "BEGIN{exit !($PCT < $COV_THRESHOLD)}"; then
-              echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"
-              exit 1
+              echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"; exit 1
             else
               echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
             fi
@@ -296,9 +243,9 @@ SCRIPT
           echo "tests_ran=true" >> "$GITHUB_OUTPUT"
           exit "$EXIT_CODE"
 
-      - name: Run Gradle tests with JaCoCo
-        id: gradle-tests
-        if: steps.detect-java.outputs.has_tests == 'true' && steps.detect-java.outputs.build_tool == 'gradle'
+      - name: Run Gradle tests
+        id: gradle
+        if: steps.java-detect.outputs.has_tests == 'true' && steps.java-detect.outputs.tool == 'gradle'
         env:
           REPORTS_DIR: security-reports
         run: |
@@ -308,45 +255,36 @@ SCRIPT
           EXIT_CODE=$?
           set -e
           JACOCO=$(find . -name "jacocoTestReport.xml" | head -1)
-          if [ -n "$JACOCO" ]; then
-            cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"
-          fi
+          if [ -n "$JACOCO" ]; then cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"; fi
           echo "tests_ran=true"       >> "$GITHUB_OUTPUT"
           echo "coverage_pct=N/A"     >> "$GITHUB_OUTPUT"
           echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
           exit "$EXIT_CODE"
 
-      - name: No tests found
-        id: no-tests
-        if: steps.detect-java.outputs.has_tests == 'false'
-        run: |
-          echo "No Java tests found – skipping."
-
-      - name: Consolidate test results
+      - name: Consolidate results
         id: results
         run: |
-          if [ "${{ steps.detect-java.outputs.has_tests }}" = "false" ]; then
-            echo "tests_ran=false"          >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=N/A"         >> "$GITHUB_OUTPUT"
-            echo "coverage_status=SKIPPED"  >> "$GITHUB_OUTPUT"
-          elif [ "${{ steps.detect-java.outputs.build_tool }}" = "maven" ]; then
-            echo "tests_ran=${{ steps.maven-tests.outputs.tests_ran }}"             >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=${{ steps.maven-tests.outputs.coverage_pct }}"       >> "$GITHUB_OUTPUT"
-            echo "coverage_status=${{ steps.maven-tests.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
+          if [ "${{ steps.java-detect.outputs.has_tests }}" = "false" ]; then
+            echo "tests_ran=false"         >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A"        >> "$GITHUB_OUTPUT"
+            echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.java-detect.outputs.tool }}" = "maven" ]; then
+            echo "tests_ran=${{ steps.maven.outputs.tests_ran }}"             >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${{ steps.maven.outputs.coverage_pct }}"       >> "$GITHUB_OUTPUT"
+            echo "coverage_status=${{ steps.maven.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
           else
-            echo "tests_ran=${{ steps.gradle-tests.outputs.tests_ran }}"             >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=${{ steps.gradle-tests.outputs.coverage_pct }}"       >> "$GITHUB_OUTPUT"
-            echo "coverage_status=${{ steps.gradle-tests.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
+            echo "tests_ran=${{ steps.gradle.outputs.tests_ran }}"             >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${{ steps.gradle.outputs.coverage_pct }}"       >> "$GITHUB_OUTPUT"
+            echo "coverage_status=${{ steps.gradle.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Upload JaCoCo report
-        if: steps.detect-java.outputs.has_tests == 'true'
+        if: steps.java-detect.outputs.has_tests == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
           path: security-reports/jacoco.xml
           if-no-files-found: ignore
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 4 – Dependency Audit
@@ -365,7 +303,7 @@ SCRIPT
         with:
           fetch-depth: 0
 
-      - name: Set up Python (audit)
+      - name: Set up Python
         if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
         uses: actions/setup-python@v5
         with:
@@ -380,35 +318,11 @@ SCRIPT
           mkdir -p "$REPORTS_DIR"
           pip install pip-audit
           REQ_FLAG=""
-          if [ -f requirements.txt ]; then
-            REQ_FLAG="-r requirements.txt"
-          fi
+          if [ -f requirements.txt ]; then REQ_FLAG="-r requirements.txt"; fi
           set +e
           pip-audit $REQ_FLAG --format json --output "$REPORTS_DIR/dependency-audit.json" 2>&1
           set -e
-          cat > /tmp/parse_pip_audit.py << 'SCRIPT'
-import json, sys, os
-try:
-    data      = json.load(open(sys.argv[1]))
-    vulns     = data.get("vulnerabilities", [])
-    total     = len(vulns)
-    crit_high = sum(
-        1 for v in vulns
-        if any(a.upper().startswith(("GHSA", "CVE")) for a in v.get("aliases", []))
-    )
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write(f"total_vulns={total}\n")
-        f.write(f"critical_high={crit_high}\n")
-        f.write("tool=pip-audit\n")
-        f.write("audit_status=" + ("FAIL" if crit_high > 0 else "PASS") + "\n")
-except Exception as exc:
-    print(f"Parse error: {exc}")
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write("total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS\n")
-SCRIPT
-          python3 /tmp/parse_pip_audit.py "$REPORTS_DIR/dependency-audit.json"
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/dependency-audit.json')); v=d.get('vulnerabilities',[]); t=len(v); ch=sum(1 for x in v if any(a.upper().startswith(('GHSA','CVE')) for a in x.get('aliases',[]))); f=open(os.environ['GITHUB_OUTPUT'],'a'); f.write(f'total_vulns={t}\ncritical_high={ch}\ntool=pip-audit\naudit_status=' + ('FAIL' if ch>0 else 'PASS') + '\n')" 2>/dev/null || echo "total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS" >> "$GITHUB_OUTPUT"
 
       - name: Install Trivy
         if: needs.detect.outputs.project_type == 'java'
@@ -420,75 +334,44 @@ SCRIPT
             | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update -qq && sudo apt-get install -y trivy
 
-      - name: Run Trivy filesystem scan
-        id: trivy-scan
+      - name: Run Trivy scan
+        id: trivy
         if: needs.detect.outputs.project_type == 'java'
         env:
           REPORTS_DIR: security-reports
         run: |
           mkdir -p "$REPORTS_DIR"
           set +e
-          trivy fs . \
-            --exit-code 0 \
-            --severity HIGH,CRITICAL \
-            --format json \
+          trivy fs . --exit-code 0 --severity HIGH,CRITICAL --format json \
             --output "$REPORTS_DIR/dependency-audit.json"
           set -e
-          cat > /tmp/parse_trivy.py << 'SCRIPT'
-import json, sys, os
-try:
-    data    = json.load(open(sys.argv[1]))
-    results = data.get("Results", [])
-    total   = sum(len(r.get("Vulnerabilities") or []) for r in results)
-    ch      = sum(
-        1 for r in results
-        for v in (r.get("Vulnerabilities") or [])
-        if v.get("Severity", "").upper() in ("HIGH", "CRITICAL")
-    )
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write(f"total_vulns={total}\n")
-        f.write(f"critical_high={ch}\n")
-        f.write("tool=Trivy\n")
-        f.write("audit_status=" + ("FAIL" if ch > 0 else "PASS") + "\n")
-except Exception as exc:
-    print(f"Parse error: {exc}")
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write("total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS\n")
-SCRIPT
-          python3 /tmp/parse_trivy.py "$REPORTS_DIR/dependency-audit.json"
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/dependency-audit.json')); res=d.get('Results',[]); t=sum(len(r.get('Vulnerabilities') or []) for r in res); ch=sum(1 for r in res for v in (r.get('Vulnerabilities') or []) if v.get('Severity','').upper() in ('HIGH','CRITICAL')); open(os.environ['GITHUB_OUTPUT'],'a').write(f'total_vulns={t}\ncritical_high={ch}\ntool=Trivy\naudit_status=' + ('FAIL' if ch>0 else 'PASS') + '\n')" 2>/dev/null || echo "total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS" >> "$GITHUB_OUTPUT"
 
       - name: Consolidate audit outputs
         id: audit
         run: |
-          TOOL="${{ steps.pip-audit.outputs.tool }}"
-          if [ -z "$TOOL" ]; then
-            TOOL="${{ steps.trivy-scan.outputs.tool }}"
-            echo "tool=${{ steps.trivy-scan.outputs.tool }}"               >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.trivy-scan.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
-            echo "critical_high=${{ steps.trivy-scan.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.trivy-scan.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tool=${{ steps.pip-audit.outputs.tool }}"               >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
+          if [ -n "${{ steps.pip-audit.outputs.tool }}" ]; then
+            echo "tool=${{ steps.pip-audit.outputs.tool }}"                   >> "$GITHUB_OUTPUT"
+            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}"     >> "$GITHUB_OUTPUT"
             echo "critical_high=${{ steps.pip-audit.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}"   >> "$GITHUB_OUTPUT"
+          else
+            echo "tool=${{ steps.trivy.outputs.tool }}"                   >> "$GITHUB_OUTPUT"
+            echo "total_vulns=${{ steps.trivy.outputs.total_vulns }}"     >> "$GITHUB_OUTPUT"
+            echo "critical_high=${{ steps.trivy.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
+            echo "audit_status=${{ steps.trivy.outputs.audit_status }}"   >> "$GITHUB_OUTPUT"
           fi
 
       - name: Fail on high or critical vulnerabilities
         if: steps.audit.outputs.audit_status == 'FAIL'
-        run: |
-          echo "High/Critical vulnerabilities found – failing pipeline."
-          exit 1
+        run: exit 1
 
-      - name: Upload dependency audit report
+      - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
           name: dependency-audit-report
           path: security-reports/dependency-audit.json
           if-no-files-found: ignore
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 5 – SAST (Semgrep)
@@ -509,17 +392,14 @@ SCRIPT
       - name: Install Semgrep
         run: pip install semgrep
 
-      - name: Resolve changed files in commit range
-        id: changed-files
+      - name: Resolve changed files
+        id: changed
         run: |
           BASE="${{ needs.detect.outputs.base_sha }}"
           HEAD="${{ needs.detect.outputs.head_sha }}"
           git fetch origin "$BASE" 2>/dev/null || true
-          FILES=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null \
-                  | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' \
-                  | tr '\n' ' ')
-          echo "changed_files=$FILES" >> "$GITHUB_OUTPUT"
-          echo "Changed files: $FILES"
+          FILES=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' | tr '\n' ' ')
+          echo "files=${FILES}" >> "$GITHUB_OUTPUT"
 
       - name: Run Semgrep
         id: semgrep
@@ -527,55 +407,22 @@ SCRIPT
           REPORTS_DIR: security-reports
         run: |
           mkdir -p "$REPORTS_DIR"
-          FILES="${{ steps.changed-files.outputs.changed_files }}"
-          if [ -z "$FILES" ]; then
-            SCAN_TARGET="."
-          else
-            SCAN_TARGET="$FILES"
-          fi
+          FILES="${{ steps.changed.outputs.files }}"
+          SCAN_TARGET="${FILES:-.}"
           set +e
-          semgrep --config=auto \
-            --json \
-            --output "$REPORTS_DIR/semgrep-report.json" \
-            $SCAN_TARGET 2>&1
+          semgrep --config=auto --json --output "$REPORTS_DIR/semgrep-report.json" $SCAN_TARGET 2>&1
           set -e
-          cat > /tmp/parse_semgrep.py << 'SCRIPT'
-import json, sys, os
-try:
-    data    = json.load(open(sys.argv[1]))
-    results = data.get("results", [])
-    total   = len(results)
-    sev_map = {}
-    for r in results:
-        sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
-        sev_map[sev] = sev_map.get(sev, 0) + 1
-    summary = ", ".join(f"{k}:{v}" for k, v in sev_map.items()) or "none"
-    status  = "FAIL" if sev_map.get("ERROR", 0) > 0 else "PASS"
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write(f"semgrep_findings={total}\n")
-        f.write(f"severity_summary={summary}\n")
-        f.write(f"sast_status={status}\n")
-except Exception as exc:
-    print(f"Parse error: {exc}")
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write("semgrep_findings=0\nseverity_summary=none\nsast_status=PASS\n")
-SCRIPT
-          python3 /tmp/parse_semgrep.py "$REPORTS_DIR/semgrep-report.json"
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/semgrep-report.json')); res=d.get('results',[]); t=len(res); sev={}; [sev.__setitem__(r.get('extra',{}).get('severity','UNKNOWN').upper(), sev.get(r.get('extra',{}).get('severity','UNKNOWN').upper(),0)+1) for r in res]; summ=', '.join(f'{k}:{v}' for k,v in sev.items()) or 'none'; st='FAIL' if sev.get('ERROR',0)>0 else 'PASS'; open(os.environ['GITHUB_OUTPUT'],'a').write(f'semgrep_findings={t}\nseverity_summary={summ}\nsast_status={st}\n')" 2>/dev/null || echo "semgrep_findings=0\nseverity_summary=none\nsast_status=PASS" >> "$GITHUB_OUTPUT"
 
       - name: Fail on high or critical SAST findings
         if: steps.semgrep.outputs.sast_status == 'FAIL'
-        run: |
-          echo "High/Critical Semgrep findings – failing pipeline."
-          exit 1
+        run: exit 1
 
       - name: Upload Semgrep report
         uses: actions/upload-artifact@v4
         with:
           name: semgrep-report
           path: security-reports/semgrep-report.json
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 6 – Secret Detection (Gitleaks)
@@ -595,12 +442,11 @@ SCRIPT
       - name: Install Gitleaks
         run: |
           GITLEAKS_VERSION="8.18.4"
-          curl -sSfL \
-            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
-      - name: Run Gitleaks on commit range
+      - name: Run Gitleaks
         id: gitleaks
         env:
           REPORTS_DIR: security-reports
@@ -610,35 +456,15 @@ SCRIPT
           HEAD="${{ needs.detect.outputs.head_sha }}"
           git fetch origin "$BASE" 2>/dev/null || true
           set +e
-          gitleaks detect \
-            --source . \
+          gitleaks detect --source . \
             --log-opts "${BASE}..${HEAD}" \
             --report-format json \
             --report-path "$REPORTS_DIR/gitleaks-report.json" \
-            --exit-code 1 \
-            --no-banner 2>&1
+            --exit-code 1 --no-banner 2>&1
           EXIT_CODE=$?
           set -e
-          cat > /tmp/parse_gitleaks.py << 'SCRIPT'
-import json, sys, os
-try:
-    data   = json.load(open(sys.argv[1]))
-    total  = len(data) if isinstance(data, list) else 0
-    status = "FAIL" if total > 0 else "PASS"
-    out    = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write(f"secrets_found={total}\n")
-        f.write(f"secret_status={status}\n")
-except Exception:
-    out = os.environ["GITHUB_OUTPUT"]
-    with open(out, "a") as f:
-        f.write("secrets_found=0\nsecret_status=PASS\n")
-SCRIPT
-          python3 /tmp/parse_gitleaks.py "$REPORTS_DIR/gitleaks-report.json"
-          if [ "$EXIT_CODE" -ne 0 ]; then
-            echo "Gitleaks detected secrets – failing pipeline."
-            exit 1
-          fi
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/gitleaks-report.json')); t=len(d) if isinstance(d,list) else 0; st='FAIL' if t>0 else 'PASS'; open(os.environ['GITHUB_OUTPUT'],'a').write(f'secrets_found={t}\nsecret_status={st}\n')" 2>/dev/null || echo "secrets_found=0\nsecret_status=PASS" >> "$GITHUB_OUTPUT"
+          if [ "$EXIT_CODE" -ne 0 ]; then exit 1; fi
 
       - name: Upload Gitleaks report
         if: always()
@@ -648,33 +474,25 @@ SCRIPT
           path: security-reports/gitleaks-report.json
           if-no-files-found: ignore
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 7 – Generate PDF Security Report
 # ══════════════════════════════════════════════════════════════════════════════
   report:
     name: Generate Security Report
-    needs:
-      - detect
-      - test-python
-      - test-java
-      - dependency-audit
-      - sast
-      - secret-scan
+    needs: [detect, test-python, test-java, dependency-audit, sast, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install report dependencies
         run: pip install reportlab
 
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: downloaded-artifacts
@@ -696,179 +514,10 @@ SCRIPT
           SAST_STATUS:      ${{ needs.sast.outputs.sast_status }}
           SECRETS_FOUND:    ${{ needs.secret-scan.outputs.secrets_found }}
           SECRET_STATUS:    ${{ needs.secret-scan.outputs.secret_status }}
-        run: |
-          mkdir -p security-reports
-          cat > /tmp/gen_report.py << 'SCRIPT'
-import os, datetime
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import cm
-from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+          COV_THRESHOLD:    ${{ env.COV_THRESHOLD }}
+        run: python3 .github/scripts/gen_security_report.py
 
-def env(k, default="N/A"):
-    return os.environ.get(k, default) or default
-
-def status_color(s):
-    s = (s or "").upper()
-    if s == "PASS":    return colors.HexColor("#28a745")
-    if s == "FAIL":    return colors.HexColor("#dc3545")
-    if s == "SKIPPED": return colors.HexColor("#6c757d")
-    return colors.black
-
-def badge(s):
-    return "[" + (s or "N/A").upper() + "]"
-
-doc = SimpleDocTemplate(
-    "security-reports/security-report.pdf",
-    pagesize=A4,
-    leftMargin=2*cm, rightMargin=2*cm,
-    topMargin=2*cm,  bottomMargin=2*cm,
-)
-styles = getSampleStyleSheet()
-H1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=18,
-                    spaceAfter=6, textColor=colors.HexColor("#1a1a2e"))
-H2 = ParagraphStyle("H2", parent=styles["Heading2"], fontSize=13,
-                    spaceAfter=4, textColor=colors.HexColor("#16213e"))
-SM = ParagraphStyle("SM", parent=styles["Normal"],   fontSize=9,
-                    textColor=colors.grey)
-
-story = []
-story.append(Spacer(1, 1*cm))
-story.append(Paragraph("Security CI Report", H1))
-story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1a1a2e")))
-story.append(Spacer(1, 0.4*cm))
-
-def make_table(data, col_widths=None):
-    if col_widths is None:
-        col_widths = [5*cm, 12*cm]
-    t = Table(data, colWidths=col_widths)
-    t.setStyle(TableStyle([
-        ("BACKGROUND",     (0, 0), (0, -1), colors.HexColor("#f0f0f0")),
-        ("FONTNAME",       (0, 0), (0, -1), "Helvetica-Bold"),
-        ("FONTSIZE",       (0, 0), (-1, -1), 9),
-        ("GRID",           (0, 0), (-1, -1), 0.4, colors.lightgrey),
-        ("ROWBACKGROUNDS", (0, 0), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
-        ("LEFTPADDING",    (0, 0), (-1, -1), 6),
-        ("RIGHTPADDING",   (0, 0), (-1, -1), 6),
-    ]))
-    return t
-
-story.append(Paragraph("General Information", H2))
-story.append(make_table([
-    ["Repository",   env("GITHUB_REPOSITORY")],
-    ["Branch",       env("GITHUB_REF_NAME")],
-    ["Commit SHA",   env("GITHUB_SHA")],
-    ["Workflow Run", env("GITHUB_RUN_ID")],
-    ["Triggered By", env("GITHUB_EVENT_NAME")],
-    ["Commit Range", env("COMMIT_RANGE")],
-    ["Project Type", env("PROJECT_TYPE")],
-    ["Report Date",  datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")],
-]))
-story.append(Spacer(1, 0.5*cm))
-
-cov_status = env("COVERAGE_STATUS")
-story.append(Paragraph("Test Summary", H2))
-t2 = make_table([
-    ["Tests Executed", "Yes" if env("TESTS_RAN") == "true" else "Skipped"],
-    ["Coverage %",     env("COVERAGE_PCT")],
-    ["Status",         badge(cov_status)],
-    ["Threshold",      "60%"],
-])
-t2.setStyle(TableStyle([
-    ("TEXTCOLOR", (1, 2), (1, 2), status_color(cov_status)),
-    ("FONTNAME",  (1, 2), (1, 2), "Helvetica-Bold"),
-]))
-story.append(t2)
-story.append(Spacer(1, 0.5*cm))
-
-audit_status = env("AUDIT_STATUS")
-story.append(Paragraph("Dependency Audit", H2))
-t3 = make_table([
-    ["Tool",              env("AUDIT_TOOL")],
-    ["Total Vulns",       env("TOTAL_VULNS")],
-    ["High / Critical",   env("CRITICAL_HIGH")],
-    ["Status",            badge(audit_status)],
-])
-t3.setStyle(TableStyle([
-    ("TEXTCOLOR", (1, 3), (1, 3), status_color(audit_status)),
-    ("FONTNAME",  (1, 3), (1, 3), "Helvetica-Bold"),
-]))
-story.append(t3)
-story.append(Spacer(1, 0.5*cm))
-
-sast_status = env("SAST_STATUS")
-story.append(Paragraph("SAST Semgrep", H2))
-t4 = make_table([
-    ["Total Findings",    env("SEMGREP_FINDINGS")],
-    ["Severity Breakdown",env("SEVERITY_SUMMARY")],
-    ["Status",            badge(sast_status)],
-])
-t4.setStyle(TableStyle([
-    ("TEXTCOLOR", (1, 2), (1, 2), status_color(sast_status)),
-    ("FONTNAME",  (1, 2), (1, 2), "Helvetica-Bold"),
-]))
-story.append(t4)
-story.append(Spacer(1, 0.5*cm))
-
-secret_status = env("SECRET_STATUS")
-story.append(Paragraph("Secret Detection Gitleaks", H2))
-t5 = make_table([
-    ["Secrets Found", env("SECRETS_FOUND")],
-    ["Status",        badge(secret_status)],
-])
-t5.setStyle(TableStyle([
-    ("TEXTCOLOR", (1, 1), (1, 1), status_color(secret_status)),
-    ("FONTNAME",  (1, 1), (1, 1), "Helvetica-Bold"),
-]))
-story.append(t5)
-story.append(Spacer(1, 0.6*cm))
-
-story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1a1a2e")))
-story.append(Spacer(1, 0.3*cm))
-story.append(Paragraph("Final CI Summary", H2))
-
-statuses     = [cov_status, audit_status, sast_status, secret_status]
-overall      = "FAIL" if "FAIL" in [s.upper() for s in statuses] else "PASS"
-summary_data = [
-    ["Check",            "Status"],
-    ["Coverage",         badge(cov_status)],
-    ["Dependency Audit", badge(audit_status)],
-    ["SAST",             badge(sast_status)],
-    ["Secret Scan",      badge(secret_status)],
-    ["OVERALL",          badge(overall)],
-]
-t6 = Table(summary_data, colWidths=[8*cm, 9*cm])
-style_cmds = [
-    ("BACKGROUND",     (0, 0),  (-1, 0),  colors.HexColor("#1a1a2e")),
-    ("TEXTCOLOR",      (0, 0),  (-1, 0),  colors.white),
-    ("FONTNAME",       (0, 0),  (-1, 0),  "Helvetica-Bold"),
-    ("FONTSIZE",       (0, 0),  (-1, -1), 10),
-    ("GRID",           (0, 0),  (-1, -1), 0.4, colors.lightgrey),
-    ("BACKGROUND",     (0, -1), (-1, -1), colors.HexColor("#1a1a2e")),
-    ("TEXTCOLOR",      (0, -1), (-1, -1), colors.white),
-    ("FONTNAME",       (0, -1), (-1, -1), "Helvetica-Bold"),
-    ("ROWBACKGROUNDS", (0, 1),  (-1, -2), [colors.white, colors.HexColor("#fafafa")]),
-    ("LEFTPADDING",    (0, 0),  (-1, -1), 8),
-    ("TOPPADDING",     (0, 0),  (-1, -1), 5),
-    ("BOTTOMPADDING",  (0, 0),  (-1, -1), 5),
-]
-for i in range(1, len(summary_data)):
-    style_cmds.append(("TEXTCOLOR", (1, i), (1, i),
-                        status_color(summary_data[i][1].strip("[]"))))
-t6.setStyle(TableStyle(style_cmds))
-story.append(t6)
-story.append(Spacer(1, 0.4*cm))
-story.append(Paragraph(
-    "Generated automatically by the Security CI pipeline.", SM
-))
-
-doc.build(story)
-print("PDF generated: security-reports/security-report.pdf")
-SCRIPT
-          python3 /tmp/gen_report.py
-
-      - name: Upload Security Report PDF
+      - name: Upload security report PDF
         uses: actions/upload-artifact@v4
         with:
           name: security-report
