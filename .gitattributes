@@ -1,0 +1,9 @@
+# Force LF line endings for shell scripts and security files
+.githooks/pre-commit            text eol=lf
+scripts/security/*.txt          text eol=lf
+scripts/security/*.sh           text eol=lf
+
+# Windows files use CRLF
+*.ps1                           text eol=crlf
+*.cmd                           text eol=crlf
+*.bat                           text eol=crlf

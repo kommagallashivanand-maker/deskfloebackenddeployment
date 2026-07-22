@@ -1,0 +1,24 @@
+{
+    "model_version": "baseline_v1",
+    "training_date": "2026-07-21T07:31:34.816376+00:00",
+    "dataset_version": "tickets_v1",
+    "random_seed": 42,
+    "train_size": 1608,
+    "test_size": 402,
+    "classes": [
+        "Account Access",
+        "Billing",
+        "Data Management",
+        "Feature Request",
+        "General Inquiry",
+        "Notifications",
+        "Performance",
+        "Security",
+        "Subscription",
+        "Technical"
+    ],
+    "accuracy": 0.7686567164179104,
+    "macro_f1": 0.7635699273026505,
+    "weighted_f1": 0.7641539196093655,
+    "sklearn_version": "1.9.0"
+}
