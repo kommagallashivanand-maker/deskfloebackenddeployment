@@ -1,0 +1,45 @@
+# Environment Files
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging
+.env.production
+
+# Private Keys & Certificates
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# Credentials & Secrets
+credentials.json
+service-account*.json
+*-serviceaccount.json
+secrets.yml
+secrets.json
+secrets.properties
+
+# AWS Credentials
+.aws/credentials
+.aws/config
+
+# API Keys & Tokens
+.apikey
+.token
+*.token
+
+# SSH & Security
+*.ovpn
+apikey.json
