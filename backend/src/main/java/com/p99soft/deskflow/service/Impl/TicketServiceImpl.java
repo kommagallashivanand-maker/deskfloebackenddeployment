@@ -28,11 +28,15 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.p99soft.deskflow.exception.InvalidStatusTransitionException;
+import com.p99soft.deskflow.service.ActivityService;
 import jakarta.persistence.criteria.Predicate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -45,6 +49,16 @@ public class TicketServiceImpl implements TicketService {
     private final CategoryRepository categoryRepository;
     private final TicketMapper ticketMapper;
     private final StorageService storageService;
+    private final ActivityService activityService;
+
+    private static final Map<Status, Set<Status>> ALLOWED_TRANSITIONS = Map.of(
+            Status.OPEN, Set.of(Status.TRIAGED, Status.IN_PROGRESS, Status.CLOSED),
+            Status.TRIAGED, Set.of(Status.IN_PROGRESS, Status.ON_HOLD, Status.CLOSED),
+            Status.IN_PROGRESS, Set.of(Status.ON_HOLD, Status.RESOLVED, Status.CLOSED),
+            Status.ON_HOLD, Set.of(Status.IN_PROGRESS, Status.CLOSED),
+            Status.RESOLVED, Set.of(Status.CLOSED, Status.OPEN, Status.IN_PROGRESS),
+            Status.CLOSED, Set.of(Status.OPEN, Status.IN_PROGRESS)
+    );
 
     @Override
     @Transactional
@@ -174,6 +188,12 @@ public class TicketServiceImpl implements TicketService {
             return;
         }
 
+        Set<Status> allowed = ALLOWED_TRANSITIONS.getOrDefault(oldStatus, Set.of());
+        if (!allowed.contains(newStatus)) {
+            log.error("Invalid status transition attempted from {} to {} for ticket ID: {}", oldStatus, newStatus, ticket.getId());
+            throw new InvalidStatusTransitionException("Invalid status transition from " + oldStatus + " to " + newStatus);
+        }
+
         // Reopen validation: Transition from RESOLVED/CLOSED back to OPEN/IN_PROGRESS
         if ((oldStatus == Status.RESOLVED || oldStatus == Status.CLOSED) &&
                 (newStatus == Status.OPEN || newStatus == Status.IN_PROGRESS)) {
@@ -189,6 +209,9 @@ public class TicketServiceImpl implements TicketService {
         } else if (newStatus == Status.CLOSED) {
             ticket.setClosedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
         }
+
+        // Log audit activity
+        activityService.logActivity(ticket, ticket.getCreatedBy(), "STATUS_TRANSITION", oldStatus.name(), newStatus.name());
     }
 
     private void updateCategory(Ticket ticket, UUID categoryId) {
