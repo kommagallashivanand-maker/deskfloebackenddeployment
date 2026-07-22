@@ -6,7 +6,7 @@ DeskFlow is an internal helpdesk and ticketing platform designed to streamline s
 
 ## Database Entity-Relationship Diagram (ERD)
 
-Below is the entity-relationship model representing the database schema. It consists of five core tables: `teams`, `categories`, `users`, `tickets`, and `ticket_attachments`.
+Below is the entity-relationship model representing the database schema. It consists of seven core tables: `teams`, `sla_policies`, `categories`, `users`, `tickets`, `ticket_attachments`, `ticket_activities`, and `ticket_comments`.
 
 ```mermaid
 erDiagram
@@ -15,6 +15,9 @@ erDiagram
     USERS ||--o{ TICKETS : "creates (created_by)"
     USERS ||--o{ TICKETS : "handles (assigned_to)"
     TICKETS ||--o{ TICKET_ATTACHMENTS : "has attachments"
+    TICKETS ||--o{ TICKET_ACTIVITIES : "has audit history"
+    TICKETS ||--o{ TICKET_COMMENTS : "has comments"
+    USERS ||--o{ TICKET_COMMENTS : "authors"
 
     TEAMS {
         uuid id PK
@@ -83,14 +86,37 @@ erDiagram
         bigint file_size
         timestamp created_at
     }
+
+    TICKET_ACTIVITIES {
+        uuid id PK
+        uuid ticket_id FK
+        uuid actor_id FK
+        varchar activity_type
+        varchar old_value
+        varchar new_value
+        timestamp created_at
+    }
+
+    TICKET_COMMENTS {
+        uuid id PK
+        uuid ticket_id FK
+        uuid user_id FK
+        uuid parent_comment_id FK
+        text content
+        timestamp created_at
+        timestamp updated_at
+    }
 ```
 
 ### Table Details
 1. **Teams (`teams`)**: Organizes users into specific departments (e.g., Support, Engineering).
-2. **Categories (`categories`)**: Categorizes tickets to enable correct routing (e.g., Network, Hardware).
-3. **Users (`users`)**: Represents all registered employees, agents, and admins.
-4. **Tickets (`tickets`)**: Tracks support issues, priority, state transitions, assignees, and resolution timestamps.
-5. **Ticket Attachments (`ticket_attachments`)**: Stores S3 file attachment metadata linked to tickets.
+2. **SLA Policies (`sla_policies`)**: Configures response and resolution target times per priority level.
+3. **Categories (`categories`)**: Categorizes tickets to enable correct routing (e.g., Network, Hardware).
+4. **Users (`users`)**: Represents all registered employees, agents, and admins.
+5. **Tickets (`tickets`)**: Tracks support issues, priority, state machine transitions, assignees, and resolution timestamps.
+6. **Ticket Attachments (`ticket_attachments`)**: Stores AWS S3 file attachment metadata linked to tickets.
+7. **Ticket Activities (`ticket_activities`)**: Stores state transition audit logs and historical changes.
+8. **Ticket Comments (`ticket_comments`)**: Stores threaded conversation comments, replies, and user mentions.
 
 ---
 
@@ -101,7 +127,7 @@ erDiagram
 * **PostgreSQL** running locally on port `5432` with a database named `deskflow` (username: `postgres`, password: `postgres`).
 
 ### Running Locally
-To run the backend service and execute migrations:
+To run the backend service and execute Flyway database migrations:
 
 1. Navigate to the `backend` directory:
    ```bash
@@ -121,14 +147,24 @@ To run the backend service and execute migrations:
 
 ## API Documentation & Endpoint Reference
 
-### Ticket Management APIs (`/api/v1/tickets`)
+### Ticket Core & Attachments APIs (`/api/v1/tickets`)
 
 | Method | Endpoint | Description | Query Parameters / Content-Type |
 | :--- | :--- | :--- | :--- |
 | **POST** | `/api/v1/tickets` | Create a new ticket with optional file attachments (AWS S3) | `multipart/form-data` (`ticket` JSON string + optional `files` array) |
 | **GET** | `/api/v1/tickets/{id}` | Get detailed information of a ticket by UUID (returns 60-min pre-signed S3 URLs) | `id` (Path variable) |
-| **PUT** | `/api/v1/tickets/{id}` | Update an existing ticket (supports status transitions & `reopenCount`) | `id` (Path variable), JSON Body |
+| **PUT** | `/api/v1/tickets/{id}` | Update an existing ticket (enforces state machine matrix & `reopenCount`) | `id` (Path variable), JSON Body |
 | **GET** | `/api/v1/tickets` | List tickets with pagination, timeline sorting, multi-field search, and filters | `page`, `size`, `search`, `status`, `priority`, `category`, `assignee`, `sortBy`, `sortDir` |
+
+---
+
+### Ticket Comments & Audit Activity APIs (`/api/v1/tickets`)
+
+| Method | Endpoint | Description | Query Parameters / Content-Type |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/api/v1/tickets/{ticketId}/comments` | Post a top-level comment or threaded reply (parses `@user` mentions) | `ticketId` (Path variable), `application/json` |
+| **GET** | `/api/v1/tickets/{ticketId}/comments` | Retrieve threaded comments and nested replies for a ticket | `ticketId` (Path variable) |
+| **GET** | `/api/v1/tickets/{ticketId}/activities` | Retrieve chronological state transition and audit activity timeline | `ticketId` (Path variable) |
 
 ---
 
