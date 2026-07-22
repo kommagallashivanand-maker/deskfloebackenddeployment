@@ -149,6 +149,7 @@ jobs:
             (cd "$PYDIR" && python -m pytest \
               --cov=. \
               --cov-report=xml:"$ABS_REPORTS/coverage.xml" \
+              --cov-report=json:"$ABS_REPORTS/coverage.json" \
               --cov-report=term-missing \
               --cov-fail-under="$COV_THRESHOLD" \
               -q 2>&1 | tee "$ABS_REPORTS/pytest-output.txt")
@@ -173,8 +174,11 @@ jobs:
         if: steps.has-tests.outputs.found == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-report
-          path: security-reports/coverage.xml
+            name: coverage-report
+            path: |
+                    security-reports/coverage.xml
+                    security-reports/coverage.json
+                    security-reports/pytest-output.txt
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 3 – Tests and Coverage (Java)
