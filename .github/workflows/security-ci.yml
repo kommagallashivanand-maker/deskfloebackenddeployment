@@ -114,23 +114,68 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      - name: Detect Python project directory
+        id: detect-pydir
+        run: |
+          # Find the deepest directory containing both a requirements.txt/pyproject.toml and a tests/ folder
+          PYDIR=$(find . -type f \( -name "requirements.txt" -o -name "pyproject.toml" \) \
+            -exec dirname {} \; \
+            | sort -u \
+            | while read d; do
+                if find "$d" -maxdepth 2 -type d -name "tests" | grep -q . || \
+                   find "$d" -maxdepth 2 -name "test_*.py" | grep -q .; then
+                  echo "$d"; break
+                fi
+              done)
+          # Fall back to first directory with a requirements.txt
+          if [ -z "$PYDIR" ]; then
+            PYDIR=$(find . -name "requirements.txt" -exec dirname {} \; | sort | head -1)
+          fi
+          # Final fallback: repo root
+          PYDIR="${PYDIR:-.}"
+          echo "pydir=$PYDIR" >> "$GITHUB_OUTPUT"
+          echo "Detected Python project directory: $PYDIR"
+
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
-          # Install from whichever manifest exists
-          [ -f requirements.txt ]  && pip install -r requirements.txt
-          [ -f pyproject.toml ]    && pip install -e ".[dev]" 2>/dev/null || \
-                                      pip install -e . 2>/dev/null || true
-          [ -f Pipfile ]           && pip install pipenv && pipenv install --dev --system 2>/dev/null || true
-          pip install pytest pytest-cov pip-audit
+          python -m pip install --upgrade pip
+
+          # Install root requirements if present
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+          # Install all requirements.txt files in monorepo subdirectories
+          find . -name requirements.txt -not -path "./requirements.txt" \
+            -exec pip install -r {} \;
+
+          # Install editable package if pyproject.toml exists
+          if [ -f pyproject.toml ]; then
+            pip install -e . || true
+          fi
+
+          # Install editable package in detected project dir
+          PYDIR="${{ steps.detect-pydir.outputs.pydir }}"
+          if [ -f "$PYDIR/pyproject.toml" ] && [ "$PYDIR" != "." ]; then
+            pip install -e "$PYDIR" || true
+          fi
+
+          pip install \
+            pytest \
+            pytest-cov \
+            pip-audit \
+            fastapi \
+            pydantic-settings \
+            httpx
 
       - name: Detect test presence
         id: detect-tests
         run: |
-          if find . -type d -name "tests" | grep -q . || \
-             find . -name "test_*.py" | grep -q .; then
+          PYDIR="${{ steps.detect-pydir.outputs.pydir }}"
+          if find "$PYDIR" -type d -name "tests" | grep -q . || \
+             find "$PYDIR" -name "test_*.py" | grep -q .; then
             echo "has_tests=true" >> "$GITHUB_OUTPUT"
-            echo "Tests found."
+            echo "Tests found in $PYDIR"
           else
             echo "has_tests=false" >> "$GITHUB_OUTPUT"
             echo "No tests found – skipping."
@@ -143,17 +188,34 @@ jobs:
           COV_THRESHOLD: 60
         run: |
           mkdir -p "$REPORTS_DIR"
+          ABS_REPORTS="$(pwd)/$REPORTS_DIR"
+          PYDIR="${{ steps.detect-pydir.outputs.pydir }}"
+
           if [ "${{ steps.detect-tests.outputs.has_tests }}" = "true" ]; then
             set +e
-            pytest --cov=. \
-                   --cov-report=xml:"$REPORTS_DIR/coverage.xml" \
-                   --cov-report=term-missing \
-                   --cov-fail-under="$COV_THRESHOLD" \
-                   -q 2>&1 | tee "$REPORTS_DIR/pytest-output.txt"
+            cd "$PYDIR"
+            python -m pytest \
+              --cov=. \
+              --cov-report=xml:"$ABS_REPORTS/coverage.xml" \
+              --cov-report=term-missing \
+              --cov-fail-under="$COV_THRESHOLD" \
+              -q 2>&1 | tee "$ABS_REPORTS/pytest-output.txt"
             EXIT_CODE=$?
             set -e
+            cd "$GITHUB_WORKSPACE"
+
             # Extract numeric coverage from XML
-            PCT=$(python -c "import xml.etree.ElementTree as ET, sys; try: root=ET.parse(sys.argv[1]).getroot(); print(round(float(root.attrib.get('line-rate','0'))*100,2)); except Exception: print('0')" "$REPORTS_DIR/coverage.xml")
+            PCT=$(python3 - "$ABS_REPORTS/coverage.xml" <<'PY'
+import xml.etree.ElementTree as ET
+import sys
+
+try:
+    root = ET.parse(sys.argv[1]).getroot()
+    print(round(float(root.attrib.get("line-rate", "0")) * 100, 2))
+except Exception:
+    print("0")
+PY
+)
             echo "coverage_pct=$PCT"      >> "$GITHUB_OUTPUT"
             echo "tests_ran=true"         >> "$GITHUB_OUTPUT"
             if [ $EXIT_CODE -eq 0 ]; then
@@ -321,27 +383,27 @@ jobs:
             --output "$REPORTS_DIR/dependency-audit.json" 2>&1
           set -e
           python3 - "$REPORTS_DIR/dependency-audit.json" <<'PYEOF'
-          import json, sys, os
-          try:
-              data = json.load(open(sys.argv[1]))
-              vulns = data.get("vulnerabilities", [])
-              total = len(vulns)
-              crit_high = sum(
-                  1 for v in vulns
-                  if any(a.upper().startswith(("GHSA","CVE")) for a in v.get("aliases",[]))
-              )
-              print(f"TOTAL={total}")
-              print(f"CRIT_HIGH={crit_high}")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"total_vulns={total}\n")
-                  f.write(f"critical_high={crit_high}\n")
-                  f.write("tool=pip-audit\n")
-                  f.write(f"audit_status={'FAIL' if crit_high > 0 else 'PASS'}\n")
-          except Exception as e:
-              print(f"Parse error: {e}")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS\n")
-          PYEOF
+import json, sys, os
+try:
+    data = json.load(open(sys.argv[1]))
+    vulns = data.get("vulnerabilities", [])
+    total = len(vulns)
+    crit_high = sum(
+        1 for v in vulns
+        if any(a.upper().startswith(("GHSA","CVE")) for a in v.get("aliases",[]))
+    )
+    print(f"TOTAL={total}")
+    print(f"CRIT_HIGH={crit_high}")
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write(f"total_vulns={total}\n")
+        f.write(f"critical_high={crit_high}\n")
+        f.write("tool=pip-audit\n")
+        f.write(f"audit_status={'FAIL' if crit_high > 0 else 'PASS'}\n")
+except Exception as e:
+    print(f"Parse error: {e}")
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write("total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS\n")
+PYEOF
 
 
       # ── Java: Trivy filesystem scan ───────────────────────────────────────
@@ -371,26 +433,26 @@ jobs:
             --output "$REPORTS_DIR/dependency-audit.json"
           set -e
           python3 - "$REPORTS_DIR/dependency-audit.json" <<'PYEOF'
-          import json, sys, os
-          try:
-              data    = json.load(open(sys.argv[1]))
-              results = data.get("Results", [])
-              total   = sum(len(r.get("Vulnerabilities") or []) for r in results)
-              ch      = sum(
-                  1 for r in results
-                  for v in (r.get("Vulnerabilities") or [])
-                  if v.get("Severity","").upper() in ("HIGH","CRITICAL")
-              )
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write(f"total_vulns={total}\n")
-                  f.write(f"critical_high={ch}\n")
-                  f.write("tool=Trivy\n")
-                  f.write(f"audit_status={'FAIL' if ch > 0 else 'PASS'}\n")
-          except Exception as e:
-              print(f"Parse error: {e}")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                  f.write("total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS\n")
-          PYEOF
+import json, sys, os
+try:
+    data    = json.load(open(sys.argv[1]))
+    results = data.get("Results", [])
+    total   = sum(len(r.get("Vulnerabilities") or []) for r in results)
+    ch      = sum(
+        1 for r in results
+        for v in (r.get("Vulnerabilities") or [])
+        if v.get("Severity","").upper() in ("HIGH","CRITICAL")
+    )
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write(f"total_vulns={total}\n")
+        f.write(f"critical_high={ch}\n")
+        f.write("tool=Trivy\n")
+        f.write(f"audit_status={'FAIL' if ch > 0 else 'PASS'}\n")
+except Exception as e:
+    print(f"Parse error: {e}")
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+        f.write("total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS\n")
+PYEOF
 
       # merge step outputs into job output (only one branch will run)
       - name: Consolidate audit outputs
@@ -474,28 +536,28 @@ jobs:
             $SCAN_TARGET 2>&1
           set -e
           python3 - "$REPORTS_DIR/semgrep-report.json" <<'PYEOF'
-          import json, os, sys
-          try:
-              data    = json.load(open(sys.argv[1]))
-              results = data.get("results", [])
-              total   = len(results)
-              sev_map = {}
-              for r in results:
-                  sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
-                  sev_map[sev] = sev_map.get(sev, 0) + 1
-              summary = ", ".join(f"{k}:{v}" for k,v in sev_map.items()) or "none"
-              status  = "FAIL" if sev_map.get("ERROR", 0) > 0 else "PASS"
-              out = os.environ["GITHUB_OUTPUT"]
-              with open(out, "a") as f:
-                  f.write(f"semgrep_findings={total}\n")
-                  f.write(f"severity_summary={summary}\n")
-                  f.write(f"sast_status={status}\n")
-          except Exception as e:
-              print(f"Parse error: {e}")
-              out = os.environ["GITHUB_OUTPUT"]
-              with open(out, "a") as f:
-                  f.write("semgrep_findings=0\nseverity_summary=none\nsast_status=PASS\n")
-          PYEOF
+import json, os, sys
+try:
+    data    = json.load(open(sys.argv[1]))
+    results = data.get("results", [])
+    total   = len(results)
+    sev_map = {}
+    for r in results:
+        sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
+        sev_map[sev] = sev_map.get(sev, 0) + 1
+    summary = ", ".join(f"{k}:{v}" for k,v in sev_map.items()) or "none"
+    status  = "FAIL" if sev_map.get("ERROR", 0) > 0 else "PASS"
+    out = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write(f"semgrep_findings={total}\n")
+        f.write(f"severity_summary={summary}\n")
+        f.write(f"sast_status={status}\n")
+except Exception as e:
+    print(f"Parse error: {e}")
+    out = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write("semgrep_findings=0\nseverity_summary=none\nsast_status=PASS\n")
+PYEOF
 
       - name: Fail on high/critical SAST findings
         if: steps.semgrep.outputs.sast_status == 'FAIL'
@@ -553,20 +615,20 @@ jobs:
           EXIT_CODE=$?
           set -e
           python3 - "$REPORTS_DIR/gitleaks-report.json" <<'PYEOF'
-          import json, os, sys
-          try:
-              data   = json.load(open(sys.argv[1]))
-              total  = len(data) if isinstance(data, list) else 0
-              status = "FAIL" if total > 0 else "PASS"
-              out    = os.environ["GITHUB_OUTPUT"]
-              with open(out, "a") as f:
-                  f.write(f"secrets_found={total}\n")
-                  f.write(f"secret_status={status}\n")
-          except Exception:
-              out = os.environ["GITHUB_OUTPUT"]
-              with open(out, "a") as f:
-                  f.write("secrets_found=0\nsecret_status=PASS\n")
-          PYEOF
+import json, os, sys
+try:
+    data   = json.load(open(sys.argv[1]))
+    total  = len(data) if isinstance(data, list) else 0
+    status = "FAIL" if total > 0 else "PASS"
+    out    = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write(f"secrets_found={total}\n")
+        f.write(f"secret_status={status}\n")
+except Exception:
+    out = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write("secrets_found=0\nsecret_status=PASS\n")
+PYEOF
           if [ $EXIT_CODE -ne 0 ]; then
             echo "Gitleaks detected secrets. Failing pipeline."
             exit 1
