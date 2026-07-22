@@ -380,58 +380,137 @@ jobs:
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 5 – SAST (Semgrep)
 # ══════════════════════════════════════════════════════════════════════════════
-  sast:
-    name: SAST Semgrep
-    needs: detect
-    runs-on: ubuntu-latest
-    outputs:
-      semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
-      sast_status:      ${{ steps.semgrep.outputs.sast_status }}
-      severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+sast:
+  name: SAST Semgrep
+  needs: detect
+  runs-on: ubuntu-latest
 
-      - name: Install Semgrep
-        run: pip install semgrep
+  outputs:
+    semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
+    sast_status: ${{ steps.semgrep.outputs.sast_status }}
+    severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
 
-      - name: Resolve changed files
-        id: changed
-        run: |
-          BASE="${{ needs.detect.outputs.base_sha }}"
-          HEAD="${{ needs.detect.outputs.head_sha }}"
-          git fetch origin "$BASE" 2>/dev/null || true
-          FILES=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' | tr '\n' ' ')
-          echo "files=${FILES}" >> "$GITHUB_OUTPUT"
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-      - name: Run Semgrep
-        id: semgrep
-        env:
-          REPORTS_DIR: security-reports
-        run: |
-          mkdir -p "$REPORTS_DIR"
-          FILES="${{ steps.changed.outputs.files }}"
-          SCAN_TARGET="${FILES:-.}"
-          set +e
-          semgrep --config=auto --json --output "$REPORTS_DIR/semgrep-report.json" $SCAN_TARGET 2>&1
-          set -e
-          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/semgrep-report.json')); res=d.get('results',[]); t=len(res); sev={}; [sev.__setitem__(r.get('extra',{}).get('severity','UNKNOWN').upper(), sev.get(r.get('extra',{}).get('severity','UNKNOWN').upper(),0)+1) for r in res]; summ=', '.join(f'{k}:{v}' for k,v in sev.items()) or 'none'; st='FAIL' if sev.get('ERROR',0)>0 else 'PASS'; open(os.environ['GITHUB_OUTPUT'],'a').write(f'semgrep_findings={t}\nseverity_summary={summ}\nsast_status={st}\n')" 2>/dev/null || echo "semgrep_findings=0\nseverity_summary=none\nsast_status=PASS" >> "$GITHUB_OUTPUT"
+    - name: Install Semgrep
+      run: pip install semgrep
 
-      - name: Fail on high or critical SAST findings
-        if: steps.semgrep.outputs.sast_status == 'FAIL'
-        run: exit 1
+    - name: Resolve changed files
+      id: changed
+      run: |
+        BASE="${{ needs.detect.outputs.base_sha }}"
+        HEAD="${{ needs.detect.outputs.head_sha }}"
 
-      - name: Upload Semgrep report
-        uses: actions/upload-artifact@v4
-        with:
-          name: semgrep-report
-          path: security-reports/semgrep-report.json
+        git fetch origin "$BASE" 2>/dev/null || true
+
+        FILES=$(git diff --name-only "$BASE" "$HEAD" \
+          | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' \
+          | tr '\n' ' ')
+
+        echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+    - name: Run Semgrep
+      id: semgrep
+      env:
+        REPORTS_DIR: security-reports
+      run: |
+        mkdir -p "$REPORTS_DIR"
+
+        FILES="${{ steps.changed.outputs.files }}"
+        SCAN_TARGET="${FILES:-.}"
+
+        semgrep \
+          --config=auto \
+          --json \
+          --output "$REPORTS_DIR/semgrep-report.json" \
+          $SCAN_TARGET
+
+        python3 <<'EOF'
+        import json
+        import os
+
+        report = os.path.join(os.environ["REPORTS_DIR"], "semgrep-report.json")
+
+        with open(report) as f:
+            data = json.load(f)
+
+        results = data.get("results", [])
+
+        severity_count = {}
+
+        for r in results:
+            sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
+            severity_count[sev] = severity_count.get(sev, 0) + 1
+
+        status = "FAIL" if severity_count.get("ERROR", 0) > 0 else "PASS"
+
+        summary = ", ".join(
+            f"{k}:{v}" for k, v in severity_count.items()
+        ) or "none"
+
+        report_txt = os.path.join(
+            os.environ["REPORTS_DIR"],
+            "semgrep_report(SAST).txt"
+        )
+
+        with open(report_txt, "w") as out:
+
+            out.write("=" * 70 + "\n")
+            out.write("                 SEMGREP SAST REPORT\n")
+            out.write("=" * 70 + "\n\n")
+
+            out.write(f"Overall Status : {status}\n")
+            out.write(f"Total Findings : {len(results)}\n")
+            out.write(f"Severity Summary : {summary}\n\n")
+
+            if not results:
+                out.write("No security issues detected.\n")
+
+            for i, r in enumerate(results, 1):
+
+                out.write("-" * 70 + "\n")
+                out.write(f"Issue #{i}\n")
+                out.write("-" * 70 + "\n")
+
+                out.write(f"Rule ID  : {r.get('check_id')}\n")
+                out.write(f"Severity : {r.get('extra', {}).get('severity')}\n")
+                out.write(f"Message  : {r.get('extra', {}).get('message')}\n")
+                out.write(f"File     : {r.get('path')}\n")
+                out.write(f"Line     : {r.get('start', {}).get('line')}\n")
+
+                code = r.get("extra", {}).get("lines", "")
+
+                if code:
+                    out.write("\nCode:\n")
+                    out.write(code + "\n")
+
+                out.write("\n")
+
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write(f"semgrep_findings={len(results)}\n")
+            f.write(f"severity_summary={summary}\n")
+            f.write(f"sast_status={status}\n")
+        EOF
+
+    - name: Fail on high or critical SAST findings
+      if: steps.semgrep.outputs.sast_status == 'FAIL'
+      run: exit 1
+
+    - name: Upload Semgrep Report
+      uses: actions/upload-artifact@v4
+      with:
+        name: semgrep_report(SAST)
+        path: |
+          security-reports/semgrep-report.json
+          security-reports/semgrep_report(SAST).txt
 
 # ══════════════════════════════════════════════════════════════════════════════
 # JOB 6 – Secret Detection (Gitleaks)
 # ══════════════════════════════════════════════════════════════════════════════
-  secret-scan:
+secret-scan:
     name: Secret Detection Gitleaks
     needs: detect
     runs-on: ubuntu-latest
