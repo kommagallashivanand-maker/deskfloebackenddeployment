@@ -1,0 +1,85 @@
+# Sensitive File Patterns Configuration
+# ============================================================================
+# This file defines patterns for detecting sensitive files that should not
+# be committed to the repository.
+#
+# Pattern Types:
+# - Exact filenames: .env, credentials.json
+# - Extensions: *.pem, *.key
+# - Wildcards: .env.*, id_rsa*
+# ============================================================================
+
+# Environment Files
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging
+.env.production
+.env.dev
+.env.prod
+
+# Private Keys & Certificates
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+*_rsa
+*_dsa
+*_ecdsa
+*_ed25519
+id_rsa
+id_dsa
+id_ecdsa
+id_ed25519
+*.keystore
+*.jks
+
+# AWS & Cloud Credentials
+.aws/credentials
+.aws/config
+credentials.json
+service-account*.json
+gcp-credentials*.json
+azure-credentials*.json
+*-serviceaccount.json
+
+# Database & Application Credentials
+database.yml
+secrets.yml
+secrets.json
+credentials.yml
+credentials.json
+.pgpass
+.my.cnf
+
+# SSH & Security
+known_hosts
+authorized_keys
+*.ovpn
+
+# API Keys & Tokens
+.apikey
+.token
+*.token
+apikey.json
+apikeys.json
+secrets.properties
+
+# Backup & Temporary Files (may contain secrets)
+*.backup
+*.bak
+*.old
+*.orig
+*.swp
+*~
+
+# IDE & Editor Files (may contain credentials)
+.idea/workspace.xml
+.vscode/settings.json
