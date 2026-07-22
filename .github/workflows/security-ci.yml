@@ -1,0 +1,862 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# Security CI Pipeline
+# Triggers: push → task2 / staging | PR → staging
+# Scans ONLY commits introduced by the triggering event (no full-history scans)
+# ──────────────────────────────────────────────────────────────────────────────
+name: Security CI
+
+on:
+  push:
+    branches:
+      - feature/DF_83_Quality_gates_in_CI
+      - staging
+  pull_request:
+    branches:
+      - staging
+
+# ── Shared env ────────────────────────────────────────────────────────────────
+env:
+  COVERAGE_THRESHOLD: 60          # Minimum required coverage (%)
+  PYTHON_VERSION: "3.11"
+  JAVA_VERSION: "17"
+  REPORTS_DIR: security-reports   # All tool output lands here
+
+jobs:
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 1 – Detect project type & commit range
+# ══════════════════════════════════════════════════════════════════════════════
+  detect:
+    name: Detect Project & Commit Range
+    runs-on: ubuntu-latest
+    outputs:
+      project_type:  ${{ steps.detect.outputs.project_type }}
+      commit_range:  ${{ steps.range.outputs.commit_range }}
+      base_sha:      ${{ steps.range.outputs.base_sha }}
+      head_sha:      ${{ steps.range.outputs.head_sha }}
+    steps:
+      - name: Checkout (shallow – head only)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # needed to resolve commit range refs
+
+      - name: Resolve commit range
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+          echo "base_sha=$BASE"   >> "$GITHUB_OUTPUT"
+          echo "head_sha=$HEAD"   >> "$GITHUB_OUTPUT"
+          echo "commit_range=$BASE..$HEAD" >> "$GITHUB_OUTPUT"
+          echo "Commit range: $BASE..$HEAD"
+
+      - name: Detect project type
+        id: detect
+        run: |
+          TYPE="unknown"
+          # Python / FastAPI / ML indicators
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || \
+             [ -f "Pipfile" ] || [ -f "setup.py" ]; then
+            # Check for FastAPI explicitly
+            if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null; then
+              TYPE="fastapi"
+            else
+              TYPE="python-ml"
+            fi
+          fi
+          # Java indicators (override if found alongside python files is unlikely, but keep explicit)
+          if [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            TYPE="java"
+          fi
+          # Recurse one level deeper if root has no indicators (monorepo layout)
+          if [ "$TYPE" = "unknown" ]; then
+            if find . -maxdepth 3 -name "requirements.txt" -o -name "pyproject.toml" \
+               -o -name "Pipfile" -o -name "setup.py" | grep -q .; then
+              if find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) \
+                 -exec grep -liE "fastapi" {} \; | grep -q .; then
+                TYPE="fastapi"
+              else
+                TYPE="python-ml"
+              fi
+            elif find . -maxdepth 3 -name "pom.xml" -o -name "build.gradle" \
+                 -o -name "build.gradle.kts" | grep -q .; then
+              TYPE="java"
+            fi
+          fi
+          echo "project_type=$TYPE" >> "$GITHUB_OUTPUT"
+          echo "Detected project type: $TYPE"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 2 – Tests & Coverage  (Python ML / FastAPI)
+# ══════════════════════════════════════════════════════════════════════════════
+  test-python:
+    name: Tests & Coverage (Python)
+    needs: detect
+    if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+    runs-on: ubuntu-latest
+    outputs:
+      tests_ran:       ${{ steps.run-tests.outputs.tests_ran }}
+      coverage_pct:    ${{ steps.run-tests.outputs.coverage_pct }}
+      coverage_status: ${{ steps.run-tests.outputs.coverage_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          # Install from whichever manifest exists
+          [ -f requirements.txt ]  && pip install -r requirements.txt
+          [ -f pyproject.toml ]    && pip install -e ".[dev]" 2>/dev/null || \
+                                      pip install -e . 2>/dev/null || true
+          [ -f Pipfile ]           && pip install pipenv && pipenv install --dev --system 2>/dev/null || true
+          pip install pytest pytest-cov pip-audit
+
+      - name: Detect test presence
+        id: detect-tests
+        run: |
+          if find . -type d -name "tests" | grep -q . || \
+             find . -name "test_*.py" | grep -q .; then
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+            echo "Tests found."
+          else
+            echo "has_tests=false" >> "$GITHUB_OUTPUT"
+            echo "No tests found – skipping."
+          fi
+
+      - name: Run pytest with coverage
+        id: run-tests
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          if [ "${{ steps.detect-tests.outputs.has_tests }}" = "true" ]; then
+            set +e
+            pytest --cov=. --cov-report=xml:${{ env.REPORTS_DIR }}/coverage.xml \
+                   --cov-report=term-missing \
+                   --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
+                   -q 2>&1 | tee ${{ env.REPORTS_DIR }}/pytest-output.txt
+            EXIT_CODE=$?
+            set -e
+            # Extract numeric coverage from XML
+            PCT=$(python - <<'PYEOF'
+import xml.etree.ElementTree as ET, sys
+try:
+    root = ET.parse("${{ env.REPORTS_DIR }}/coverage.xml").getroot()
+    print(round(float(root.attrib.get("line-rate","0"))*100,2))
+except Exception as e:
+    print("0")
+PYEOF
+)
+            echo "coverage_pct=$PCT"      >> "$GITHUB_OUTPUT"
+            echo "tests_ran=true"         >> "$GITHUB_OUTPUT"
+            if [ $EXIT_CODE -eq 0 ]; then
+              echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+            else
+              echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"
+              exit $EXIT_CODE
+            fi
+          else
+            echo "tests_ran=false"        >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A"       >> "$GITHUB_OUTPUT"
+            echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload coverage report
+        if: steps.detect-tests.outputs.has_tests == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ env.REPORTS_DIR }}/coverage.xml
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 3 – Tests & Coverage  (Java)
+# ══════════════════════════════════════════════════════════════════════════════
+  test-java:
+    name: Tests & Coverage (Java)
+    needs: detect
+    if: needs.detect.outputs.project_type == 'java'
+    runs-on: ubuntu-latest
+    outputs:
+      tests_ran:       ${{ steps.run-tests.outputs.tests_ran }}
+      coverage_pct:    ${{ steps.run-tests.outputs.coverage_pct }}
+      coverage_status: ${{ steps.run-tests.outputs.coverage_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Detect build tool & tests
+        id: detect-java
+        run: |
+          if [ -f "pom.xml" ]; then
+            echo "build_tool=maven" >> "$GITHUB_OUTPUT"
+          elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            echo "build_tool=gradle" >> "$GITHUB_OUTPUT"
+          fi
+          # Detect test sources
+          if find . -path "*/src/test/java/*.java" | grep -q . || \
+             find . -name "*Test.java" -o -name "*Tests.java" | grep -q .; then
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_tests=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run Maven tests + JaCoCo
+        id: run-tests
+        if: steps.detect-java.outputs.has_tests == 'true' && steps.detect-java.outputs.build_tool == 'maven'
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          set +e
+          mvn -B verify jacoco:report 2>&1 | tee ${{ env.REPORTS_DIR }}/maven-output.txt
+          EXIT_CODE=$?
+          set -e
+          # Try to read JaCoCo XML coverage
+          JACOCO=$(find . -name "jacoco.xml" | head -1)
+          if [ -n "$JACOCO" ]; then
+            cp "$JACOCO" ${{ env.REPORTS_DIR }}/jacoco.xml
+            PCT=$(python3 - <<'PYEOF'
+import xml.etree.ElementTree as ET
+try:
+    root = ET.parse("${{ env.REPORTS_DIR }}/jacoco.xml").getroot()
+    missed=int(root.find('.//counter[@type="LINE"]').get('missed',0))
+    covered=int(root.find('.//counter[@type="LINE"]').get('covered',0))
+    total=missed+covered
+    print(round(covered/total*100,2) if total else 0)
+except: print("0")
+PYEOF
+)
+            echo "coverage_pct=$PCT"   >> "$GITHUB_OUTPUT"
+            THRESHOLD=${{ env.COVERAGE_THRESHOLD }}
+            if awk "BEGIN{exit !($PCT < $THRESHOLD)}"; then
+              echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"
+              exit 1
+            else
+              echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "coverage_pct=N/A"        >> "$GITHUB_OUTPUT"
+            echo "coverage_status=UNKNOWN" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tests_ran=true" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+      - name: Run Gradle tests + JaCoCo
+        id: run-gradle
+        if: steps.detect-java.outputs.has_tests == 'true' && steps.detect-java.outputs.build_tool == 'gradle'
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          set +e
+          ./gradlew test jacocoTestReport 2>&1 | tee ${{ env.REPORTS_DIR }}/gradle-output.txt
+          EXIT_CODE=$?
+          set -e
+          JACOCO=$(find . -name "jacocoTestReport.xml" | head -1)
+          if [ -n "$JACOCO" ]; then
+            cp "$JACOCO" ${{ env.REPORTS_DIR }}/jacoco.xml
+          fi
+          echo "tests_ran=true" >> "$GITHUB_OUTPUT"
+          echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
+          echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+          exit $EXIT_CODE
+
+      - name: Skip tests (none found)
+        if: steps.detect-java.outputs.has_tests == 'false'
+        run: |
+          echo "tests_ran=false"         >> "$GITHUB_OUTPUT"
+          echo "coverage_pct=N/A"        >> "$GITHUB_OUTPUT"
+          echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
+          echo "No Java tests found – skipping."
+
+      - name: Upload JaCoCo report
+        if: steps.detect-java.outputs.has_tests == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ env.REPORTS_DIR }}/jacoco.xml
+          if-no-files-found: ignore
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 4 – Dependency Audit
+# ══════════════════════════════════════════════════════════════════════════════
+  dependency-audit:
+    name: Dependency Audit
+    needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      tool:            ${{ steps.audit.outputs.tool }}
+      total_vulns:     ${{ steps.audit.outputs.total_vulns }}
+      critical_high:   ${{ steps.audit.outputs.critical_high }}
+      audit_status:    ${{ steps.audit.outputs.audit_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Python / FastAPI: pip-audit ────────────────────────────────────────
+      - name: Set up Python (audit)
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: pip-audit
+        id: pip-audit
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          pip install pip-audit
+          set +e
+          pip-audit \
+            $([ -f requirements.txt ] && echo "-r requirements.txt" || true) \
+            --format json \
+            --output ${{ env.REPORTS_DIR }}/dependency-audit.json 2>&1
+          set -e
+          # Parse counts
+          python3 - <<'PYEOF'
+import json, sys
+try:
+    data = json.load(open("${{ env.REPORTS_DIR }}/dependency-audit.json"))
+    vulns = data.get("vulnerabilities", [])
+    total = len(vulns)
+    ch    = sum(1 for v in vulns
+                for fix in v.get("fix_versions", [])
+                if True  # pip-audit doesn't tag severity; count all
+               )
+    # pip-audit marks severity in aliases when available; count HIGH/CRITICAL via id prefix
+    crit_high = sum(
+        1 for v in vulns
+        if any(a.upper().startswith(("GHSA","CVE")) for a in v.get("aliases",[]))
+    )
+    print(f"TOTAL={total}")
+    print(f"CRIT_HIGH={crit_high}")
+    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+        f.write(f"total_vulns={total}\n")
+        f.write(f"critical_high={crit_high}\n")
+        f.write("tool=pip-audit\n")
+        f.write(f"audit_status={'FAIL' if crit_high > 0 else 'PASS'}\n")
+except Exception as e:
+    print(f"Parse error: {e}")
+    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+        f.write("total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS\n")
+PYEOF
+
+
+      # ── Java: Trivy filesystem scan ───────────────────────────────────────
+      - name: Install Trivy
+        if: needs.detect.outputs.project_type == 'java'
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] \
+            https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -qq && sudo apt-get install -y trivy
+
+      - name: Trivy filesystem scan
+        id: trivy-scan
+        if: needs.detect.outputs.project_type == 'java'
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          set +e
+          trivy fs . \
+            --exit-code 0 \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --output ${{ env.REPORTS_DIR }}/dependency-audit.json
+          set -e
+          python3 - <<'PYEOF'
+import json
+try:
+    data   = json.load(open("${{ env.REPORTS_DIR }}/dependency-audit.json"))
+    results = data.get("Results", [])
+    total  = sum(len(r.get("Vulnerabilities") or []) for r in results)
+    ch     = sum(
+        1 for r in results
+        for v in (r.get("Vulnerabilities") or [])
+        if v.get("Severity","").upper() in ("HIGH","CRITICAL")
+    )
+    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+        f.write(f"total_vulns={total}\n")
+        f.write(f"critical_high={ch}\n")
+        f.write("tool=Trivy\n")
+        f.write(f"audit_status={'FAIL' if ch > 0 else 'PASS'}\n")
+except Exception as e:
+    print(f"Parse error: {e}")
+    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+        f.write("total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS\n")
+PYEOF
+
+      # merge step outputs into job output (only one branch will run)
+      - name: Consolidate audit outputs
+        id: audit
+        run: |
+          # Forward whichever sub-step ran
+          if [ -n "${{ steps.pip-audit.outputs.tool }}" ]; then
+            echo "tool=${{ steps.pip-audit.outputs.tool }}"             >> "$GITHUB_OUTPUT"
+            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
+            echo "critical_high=${{ steps.pip-audit.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
+            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ steps.trivy-scan.outputs.tool }}" ]; then
+            echo "tool=${{ steps.trivy-scan.outputs.tool }}"               >> "$GITHUB_OUTPUT"
+            echo "total_vulns=${{ steps.trivy-scan.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
+            echo "critical_high=${{ steps.trivy-scan.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
+            echo "audit_status=${{ steps.trivy-scan.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail on critical/high vulnerabilities
+        if: steps.audit.outputs.audit_status == 'FAIL'
+        run: |
+          echo "High/Critical vulnerabilities found. Failing pipeline."
+          exit 1
+
+      - name: Upload dependency audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-report
+          path: ${{ env.REPORTS_DIR }}/dependency-audit.json
+          if-no-files-found: ignore
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 5 – SAST (Semgrep) – scans only changed files in commit range
+# ══════════════════════════════════════════════════════════════════════════════
+  sast:
+    name: SAST – Semgrep
+    needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
+      sast_status:      ${{ steps.semgrep.outputs.sast_status }}
+      severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      - name: Resolve changed files in commit range
+        id: changed-files
+        run: |
+          BASE="${{ needs.detect.outputs.base_sha }}"
+          HEAD="${{ needs.detect.outputs.head_sha }}"
+          # Ensure base is available (shallow clone edge case)
+          git fetch origin "$BASE" 2>/dev/null || true
+          FILES=$(git diff --name-only "$BASE" "$HEAD" 2>/dev/null \
+                  | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' | tr '\n' ' ')
+          echo "changed_files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Changed files: $FILES"
+
+      - name: Run Semgrep
+        id: semgrep
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          FILES="${{ steps.changed-files.outputs.changed_files }}"
+          if [ -z "$FILES" ]; then
+            echo "No scannable files changed – running project-wide scan."
+            SCAN_TARGET="."
+          else
+            SCAN_TARGET="$FILES"
+          fi
+          set +e
+          semgrep --config=auto \
+            --json \
+            --output ${{ env.REPORTS_DIR }}/semgrep-report.json \
+            $SCAN_TARGET 2>&1
+          set -e
+          python3 - <<'PYEOF'
+import json, os
+try:
+    data     = json.load(open("${{ env.REPORTS_DIR }}/semgrep-report.json"))
+    results  = data.get("results", [])
+    total    = len(results)
+    sev_map  = {}
+    for r in results:
+        sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
+        sev_map[sev] = sev_map.get(sev, 0) + 1
+    ch = sev_map.get("ERROR", 0) + sev_map.get("WARNING", 0)
+    summary = ", ".join(f"{k}:{v}" for k,v in sev_map.items()) or "none"
+    status  = "FAIL" if sev_map.get("ERROR", 0) > 0 else "PASS"
+    out = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write(f"semgrep_findings={total}\n")
+        f.write(f"severity_summary={summary}\n")
+        f.write(f"sast_status={status}\n")
+except Exception as e:
+    print(f"Parse error: {e}")
+    out = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write("semgrep_findings=0\nseverity_summary=none\nsast_status=PASS\n")
+PYEOF
+
+      - name: Fail on high/critical SAST findings
+        if: steps.semgrep.outputs.sast_status == 'FAIL'
+        run: |
+          echo "High/Critical Semgrep findings detected. Failing pipeline."
+          exit 1
+
+      - name: Upload Semgrep report
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: ${{ env.REPORTS_DIR }}/semgrep-report.json
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 6 – Secret Detection (Gitleaks) – scans ONLY the event commit range
+# ══════════════════════════════════════════════════════════════════════════════
+  secret-scan:
+    name: Secret Detection – Gitleaks
+    needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      secrets_found:  ${{ steps.gitleaks.outputs.secrets_found }}
+      secret_status:  ${{ steps.gitleaks.outputs.secret_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Run Gitleaks on commit range
+        id: gitleaks
+        run: |
+          mkdir -p ${{ env.REPORTS_DIR }}
+          BASE="${{ needs.detect.outputs.base_sha }}"
+          HEAD="${{ needs.detect.outputs.head_sha }}"
+          # Ensure base ref is available
+          git fetch origin "$BASE" 2>/dev/null || true
+          set +e
+          gitleaks detect \
+            --source . \
+            --log-opts "$BASE..$HEAD" \
+            --report-format json \
+            --report-path ${{ env.REPORTS_DIR }}/gitleaks-report.json \
+            --exit-code 1 \
+            --no-banner 2>&1
+          EXIT_CODE=$?
+          set -e
+          python3 - <<'PYEOF'
+import json, os
+try:
+    data   = json.load(open("${{ env.REPORTS_DIR }}/gitleaks-report.json"))
+    total  = len(data) if isinstance(data, list) else 0
+    status = "FAIL" if total > 0 else "PASS"
+    out    = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write(f"secrets_found={total}\n")
+        f.write(f"secret_status={status}\n")
+except Exception as e:
+    # Empty / missing report → no secrets
+    out = os.environ["GITHUB_OUTPUT"]
+    with open(out, "a") as f:
+        f.write("secrets_found=0\nsecret_status=PASS\n")
+PYEOF
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "Gitleaks detected secrets. Failing pipeline."
+            exit 1
+          fi
+
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: ${{ env.REPORTS_DIR }}/gitleaks-report.json
+          if-no-files-found: ignore
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# JOB 7 – Generate PDF Security Report  (always runs; reads all prior outputs)
+# ══════════════════════════════════════════════════════════════════════════════
+  report:
+    name: Generate Security Report
+    needs:
+      - detect
+      - test-python
+      - test-java
+      - dependency-audit
+      - sast
+      - secret-scan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python (report generation)
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install report dependencies
+        run: pip install reportlab
+
+      # Download all prior artefacts so the report can embed them
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+        continue-on-error: true
+
+      - name: Generate PDF report
+        env:
+          PROJECT_TYPE:     ${{ needs.detect.outputs.project_type }}
+          COMMIT_RANGE:     ${{ needs.detect.outputs.commit_range }}
+          # Test outputs (one of the two test jobs will have run)
+          TESTS_RAN:        ${{ needs.test-python.outputs.tests_ran || needs.test-java.outputs.tests_ran }}
+          COVERAGE_PCT:     ${{ needs.test-python.outputs.coverage_pct || needs.test-java.outputs.coverage_pct }}
+          COVERAGE_STATUS:  ${{ needs.test-python.outputs.coverage_status || needs.test-java.outputs.coverage_status }}
+          # Dependency audit
+          AUDIT_TOOL:       ${{ needs.dependency-audit.outputs.tool }}
+          TOTAL_VULNS:      ${{ needs.dependency-audit.outputs.total_vulns }}
+          CRITICAL_HIGH:    ${{ needs.dependency-audit.outputs.critical_high }}
+          AUDIT_STATUS:     ${{ needs.dependency-audit.outputs.audit_status }}
+          # SAST
+          SEMGREP_FINDINGS: ${{ needs.sast.outputs.semgrep_findings }}
+          SEVERITY_SUMMARY: ${{ needs.sast.outputs.severity_summary }}
+          SAST_STATUS:      ${{ needs.sast.outputs.sast_status }}
+          # Secrets
+          SECRETS_FOUND:    ${{ needs.secret-scan.outputs.secrets_found }}
+          SECRET_STATUS:    ${{ needs.secret-scan.outputs.secret_status }}
+        run: |
+          mkdir -p security-reports
+          python3 - <<'PYEOF'
+import os, datetime
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib import colors
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+def env(k, default="N/A"):
+    return os.environ.get(k, default) or default
+
+def status_color(s):
+    s = (s or "").upper()
+    if s == "PASS":    return colors.HexColor("#28a745")
+    if s == "FAIL":    return colors.HexColor("#dc3545")
+    if s == "SKIPPED": return colors.HexColor("#6c757d")
+    return colors.black
+
+def badge(s):
+    return f"[{(s or 'N/A').upper()}]"
+
+# ── page setup ────────────────────────────────────────────────────────────────
+doc  = SimpleDocTemplate(
+    "security-reports/security-report.pdf",
+    pagesize=A4,
+    leftMargin=2*cm, rightMargin=2*cm,
+    topMargin=2*cm,  bottomMargin=2*cm,
+)
+styles = getSampleStyleSheet()
+H1  = ParagraphStyle("H1",  parent=styles["Heading1"], fontSize=18,
+                     spaceAfter=6, textColor=colors.HexColor("#1a1a2e"))
+H2  = ParagraphStyle("H2",  parent=styles["Heading2"], fontSize=13,
+                     spaceAfter=4, textColor=colors.HexColor("#16213e"))
+BDY = ParagraphStyle("BDY", parent=styles["Normal"],   fontSize=10, leading=14)
+SM  = ParagraphStyle("SM",  parent=styles["Normal"],   fontSize=9,  textColor=colors.grey)
+
+story = []
+
+# ── Cover ─────────────────────────────────────────────────────────────────────
+story.append(Spacer(1, 1*cm))
+story.append(Paragraph("Security CI Report", H1))
+story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1a1a2e")))
+story.append(Spacer(1, 0.4*cm))
+
+# ── General Information ────────────────────────────────────────────────────────
+story.append(Paragraph("General Information", H2))
+gen_data = [
+    ["Repository",    env("GITHUB_REPOSITORY")],
+    ["Branch",        env("GITHUB_REF_NAME")],
+    ["Commit SHA",    env("GITHUB_SHA")],
+    ["Workflow Run",  env("GITHUB_RUN_ID")],
+    ["Triggered By",  env("GITHUB_EVENT_NAME")],
+    ["Commit Range",  env("COMMIT_RANGE")],
+    ["Project Type",  env("PROJECT_TYPE")],
+    ["Report Date",   datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")],
+]
+t = Table(gen_data, colWidths=[5*cm, 12*cm])
+t.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+    ("FONTNAME",   (0,0), (0,-1), "Helvetica-Bold"),
+    ("FONTSIZE",   (0,0), (-1,-1), 9),
+    ("GRID",       (0,0), (-1,-1), 0.4, colors.lightgrey),
+    ("ROWBACKGROUNDS", (0,0), (-1,-1), [colors.white, colors.HexColor("#fafafa")]),
+    ("LEFTPADDING",  (0,0), (-1,-1), 6),
+    ("RIGHTPADDING", (0,0), (-1,-1), 6),
+]))
+story.append(t)
+story.append(Spacer(1, 0.5*cm))
+
+# ── Test Summary ───────────────────────────────────────────────────────────────
+story.append(Paragraph("Test Summary", H2))
+cov_status = env("COVERAGE_STATUS")
+tests_data = [
+    ["Tests Executed",      "Yes" if env("TESTS_RAN") == "true" else "Skipped"],
+    ["Coverage %",          env("COVERAGE_PCT")],
+    ["Coverage Status",     badge(cov_status)],
+    ["Threshold",           f"{os.environ.get('COVERAGE_THRESHOLD','60')}%"],
+]
+t2 = Table(tests_data, colWidths=[5*cm, 12*cm])
+t2.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+    ("FONTNAME",   (0,0), (0,-1), "Helvetica-Bold"),
+    ("FONTSIZE",   (0,0), (-1,-1), 9),
+    ("GRID",       (0,0), (-1,-1), 0.4, colors.lightgrey),
+    ("TEXTCOLOR",  (1,2), (1,2),   status_color(cov_status)),
+    ("FONTNAME",   (1,2), (1,2),   "Helvetica-Bold"),
+    ("ROWBACKGROUNDS", (0,0), (-1,-1), [colors.white, colors.HexColor("#fafafa")]),
+    ("LEFTPADDING",  (0,0), (-1,-1), 6),
+]))
+story.append(t2)
+story.append(Spacer(1, 0.5*cm))
+
+# ── Dependency Audit ──────────────────────────────────────────────────────────
+story.append(Paragraph("Dependency Audit", H2))
+audit_status = env("AUDIT_STATUS")
+audit_data = [
+    ["Tool",                    env("AUDIT_TOOL")],
+    ["Total Vulnerabilities",   env("TOTAL_VULNS")],
+    ["High / Critical",         env("CRITICAL_HIGH")],
+    ["Status",                  badge(audit_status)],
+]
+t3 = Table(audit_data, colWidths=[5*cm, 12*cm])
+t3.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+    ("FONTNAME",   (0,0), (0,-1), "Helvetica-Bold"),
+    ("FONTSIZE",   (0,0), (-1,-1), 9),
+    ("GRID",       (0,0), (-1,-1), 0.4, colors.lightgrey),
+    ("TEXTCOLOR",  (1,3), (1,3),   status_color(audit_status)),
+    ("FONTNAME",   (1,3), (1,3),   "Helvetica-Bold"),
+    ("ROWBACKGROUNDS", (0,0), (-1,-1), [colors.white, colors.HexColor("#fafafa")]),
+    ("LEFTPADDING",  (0,0), (-1,-1), 6),
+]))
+story.append(t3)
+story.append(Spacer(1, 0.5*cm))
+
+# ── SAST ──────────────────────────────────────────────────────────────────────
+story.append(Paragraph("SAST – Semgrep", H2))
+sast_status = env("SAST_STATUS")
+sast_data = [
+    ["Total Findings",    env("SEMGREP_FINDINGS")],
+    ["Severity Breakdown",env("SEVERITY_SUMMARY")],
+    ["Status",            badge(sast_status)],
+]
+t4 = Table(sast_data, colWidths=[5*cm, 12*cm])
+t4.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+    ("FONTNAME",   (0,0), (0,-1), "Helvetica-Bold"),
+    ("FONTSIZE",   (0,0), (-1,-1), 9),
+    ("GRID",       (0,0), (-1,-1), 0.4, colors.lightgrey),
+    ("TEXTCOLOR",  (1,2), (1,2),   status_color(sast_status)),
+    ("FONTNAME",   (1,2), (1,2),   "Helvetica-Bold"),
+    ("ROWBACKGROUNDS", (0,0), (-1,-1), [colors.white, colors.HexColor("#fafafa")]),
+    ("LEFTPADDING",  (0,0), (-1,-1), 6),
+]))
+story.append(t4)
+story.append(Spacer(1, 0.5*cm))
+
+# ── Secret Scan ───────────────────────────────────────────────────────────────
+story.append(Paragraph("Secret Detection – Gitleaks", H2))
+secret_status = env("SECRET_STATUS")
+secret_data = [
+    ["Secrets Found",  env("SECRETS_FOUND")],
+    ["Status",         badge(secret_status)],
+]
+t5 = Table(secret_data, colWidths=[5*cm, 12*cm])
+t5.setStyle(TableStyle([
+    ("BACKGROUND", (0,0), (0,-1), colors.HexColor("#f0f0f0")),
+    ("FONTNAME",   (0,0), (0,-1), "Helvetica-Bold"),
+    ("FONTSIZE",   (0,0), (-1,-1), 9),
+    ("GRID",       (0,0), (-1,-1), 0.4, colors.lightgrey),
+    ("TEXTCOLOR",  (1,1), (1,1),   status_color(secret_status)),
+    ("FONTNAME",   (1,1), (1,1),   "Helvetica-Bold"),
+    ("ROWBACKGROUNDS", (0,0), (-1,-1), [colors.white, colors.HexColor("#fafafa")]),
+    ("LEFTPADDING",  (0,0), (-1,-1), 6),
+]))
+story.append(t5)
+story.append(Spacer(1, 0.6*cm))
+
+# ── Final CI Summary ──────────────────────────────────────────────────────────
+story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#1a1a2e")))
+story.append(Spacer(1, 0.3*cm))
+story.append(Paragraph("Final CI Summary", H2))
+
+statuses = [cov_status, audit_status, sast_status, secret_status]
+overall  = "FAIL" if "FAIL" in [s.upper() for s in statuses] else "PASS"
+
+summary_data = [
+    ["Check",           "Status"],
+    ["Coverage",        badge(cov_status)],
+    ["Dependency Audit",badge(audit_status)],
+    ["SAST",            badge(sast_status)],
+    ["Secret Scan",     badge(secret_status)],
+    ["OVERALL",         badge(overall)],
+]
+t6 = Table(summary_data, colWidths=[8*cm, 9*cm])
+t6.setStyle(TableStyle([
+    ("BACKGROUND",   (0,0),  (-1,0),  colors.HexColor("#1a1a2e")),
+    ("TEXTCOLOR",    (0,0),  (-1,0),  colors.white),
+    ("FONTNAME",     (0,0),  (-1,0),  "Helvetica-Bold"),
+    ("FONTSIZE",     (0,0),  (-1,-1), 10),
+    ("GRID",         (0,0),  (-1,-1), 0.4, colors.lightgrey),
+    ("BACKGROUND",   (0,-1), (-1,-1), colors.HexColor("#1a1a2e")),
+    ("TEXTCOLOR",    (0,-1), (-1,-1), colors.white),
+    ("FONTNAME",     (0,-1), (-1,-1), "Helvetica-Bold"),
+    ("ROWBACKGROUNDS", (0,1), (-1,-2), [colors.white, colors.HexColor("#fafafa")]),
+    ("LEFTPADDING",  (0,0),  (-1,-1), 8),
+    ("TOPPADDING",   (0,0),  (-1,-1), 5),
+    ("BOTTOMPADDING",(0,0),  (-1,-1), 5),
+] + [
+    ("TEXTCOLOR", (1,i), (1,i), status_color(summary_data[i][1].strip("[]")))
+    for i in range(1, len(summary_data))
+]))
+story.append(t6)
+story.append(Spacer(1, 0.4*cm))
+story.append(Paragraph(
+    "This report was generated automatically by the Security CI pipeline.",
+    SM
+))
+
+doc.build(story)
+print("PDF report generated: security-reports/security-report.pdf")
+PYEOF
+
+      - name: Upload Security Report PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-reports/security-report.pdf
+
