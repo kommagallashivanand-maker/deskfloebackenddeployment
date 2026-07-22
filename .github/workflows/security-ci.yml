@@ -153,15 +153,7 @@ jobs:
             EXIT_CODE=$?
             set -e
             # Extract numeric coverage from XML
-            PCT=$(python - "$REPORTS_DIR/coverage.xml" <<'PYEOF'
-import xml.etree.ElementTree as ET, sys
-try:
-    root = ET.parse(sys.argv[1]).getroot()
-    print(round(float(root.attrib.get("line-rate","0"))*100,2))
-except Exception:
-    print("0")
-PYEOF
-)
+            PCT=$(python -c "import xml.etree.ElementTree as ET, sys; try: root=ET.parse(sys.argv[1]).getroot(); print(round(float(root.attrib.get('line-rate','0'))*100,2)); except Exception: print('0')" "$REPORTS_DIR/coverage.xml")
             echo "coverage_pct=$PCT"      >> "$GITHUB_OUTPUT"
             echo "tests_ran=true"         >> "$GITHUB_OUTPUT"
             if [ $EXIT_CODE -eq 0 ]; then
