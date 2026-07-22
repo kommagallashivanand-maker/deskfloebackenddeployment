@@ -15,11 +15,9 @@ import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
 import com.p99soft.deskflow.service.Impl.TicketServiceImpl;
-import com.p99soft.deskflow.service.StorageService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.Page;
@@ -38,7 +36,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-public class TicketServiceTest {
+class TicketServiceTest {
+
+    private static final LocalDateTime TEST_TIME = LocalDateTime.of(2026, 7, 21, 10, 0);
 
     @Mock
     private TicketRepository ticketRepository;
@@ -50,6 +50,8 @@ public class TicketServiceTest {
     private SlaPolicyRepository slaPolicyRepository;
     @Mock
     private StorageService storageService;
+    @Mock
+    private ActivityService activityService;
 
     private com.p99soft.deskflow.mapper.TicketMapper ticketMapper;
     private TicketServiceImpl ticketService;
@@ -67,7 +69,7 @@ public class TicketServiceTest {
     @BeforeEach
     void setUp() {
         ticketMapper = new com.p99soft.deskflow.mapper.TicketMapper(slaPolicyRepository, storageService);
-        ticketService = new TicketServiceImpl(ticketRepository, userRepository, categoryRepository, ticketMapper, storageService);
+        ticketService = new TicketServiceImpl(ticketRepository, userRepository, categoryRepository, ticketMapper, storageService, activityService);
 
         ticketId = UUID.randomUUID();
         creatorId = UUID.randomUUID();
@@ -114,8 +116,8 @@ public class TicketServiceTest {
                 .createdBy(creator)
                 .category(category)
                 .reopenCount(0)
-                .createdAt(LocalDateTime.now())
-                .updatedAt(LocalDateTime.now())
+                .createdAt(TEST_TIME)
+                .updatedAt(TEST_TIME)
                 .build();
     }
 
@@ -211,6 +213,7 @@ public class TicketServiceTest {
 
     @Test
     void testUpdateTicket_StatusTransitionToResolved() {
+        ticket.setStatus(Status.IN_PROGRESS);
         TicketRequest request = TicketRequest.builder()
                 .status(Status.RESOLVED)
                 .build();
@@ -232,7 +235,7 @@ public class TicketServiceTest {
     void testUpdateTicket_ReopenTransition() {
         // Prepare ticket already resolved
         ticket.setStatus(Status.RESOLVED);
-        ticket.setResolvedAt(LocalDateTime.now());
+        ticket.setResolvedAt(TEST_TIME);
 
         TicketRequest request = TicketRequest.builder()
                 .status(Status.IN_PROGRESS)
@@ -366,7 +369,7 @@ public class TicketServiceTest {
                 .build();
 
         ticket.setAssignedTo(assignee);
-        ticket.setFirstRespondedAt(LocalDateTime.now());
+        ticket.setFirstRespondedAt(TEST_TIME);
 
         when(userRepository.findById(creatorId)).thenReturn(Optional.of(creator));
         when(categoryRepository.findById(categoryId)).thenReturn(Optional.of(category));
@@ -470,7 +473,7 @@ public class TicketServiceTest {
                 .build();
 
         ticket.setAssignedTo(assignee);
-        ticket.setFirstRespondedAt(LocalDateTime.now());
+        ticket.setFirstRespondedAt(TEST_TIME);
 
         when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
         when(userRepository.findById(assigneeId)).thenReturn(Optional.of(assignee));
