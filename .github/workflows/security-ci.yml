@@ -230,17 +230,7 @@ jobs:
           JACOCO=$(find . -name "jacoco.xml" | head -1)
           if [ -n "$JACOCO" ]; then
             cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"
-            PCT=$(python3 - "$REPORTS_DIR/jacoco.xml" <<'PYEOF'
-import xml.etree.ElementTree as ET, sys
-try:
-    root = ET.parse(sys.argv[1]).getroot()
-    missed=int(root.find('.//counter[@type="LINE"]').get('missed',0))
-    covered=int(root.find('.//counter[@type="LINE"]').get('covered',0))
-    total=missed+covered
-    print(round(covered/total*100,2) if total else 0)
-except: print("0")
-PYEOF
-)
+            PCT=$(python3 -c "import xml.etree.ElementTree as ET, sys; try: root=ET.parse(sys.argv[1]).getroot(); missed=int(root.find('.//counter[@type=\"LINE\"]').get('missed',0)); covered=int(root.find('.//counter[@type=\"LINE\"]').get('covered',0)); total=missed+covered; print(round(covered/total*100,2) if total else 0); except: print('0')" "$REPORTS_DIR/jacoco.xml")
             echo "coverage_pct=$PCT" >> "$GITHUB_OUTPUT"
             if awk "BEGIN{exit !($PCT < $COV_THRESHOLD)}"; then
               echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"
