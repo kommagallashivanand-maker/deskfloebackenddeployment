@@ -7,11 +7,11 @@ Coordinates the embedding generation workflow.
 import logging
 from typing import List
 
-from embeddings.config import MODEL_NAME, NORMALIZE_EMBEDDINGS, INPUT_CSV_PATH
-from embeddings.embedding_service import EmbeddingService
-from embeddings.loader.csv_loader import CsvLoader
-from embeddings.models.embedding_result import EmbeddingResult
-from embeddings.writer import EmbeddingWriter
+from .config import MODEL_NAME, NORMALIZE_EMBEDDINGS, INPUT_CSV_PATH
+from .embedding_service import EmbeddingService
+from .loader.csv_loader import CsvLoader
+from .models.embedding_result import EmbeddingResult
+from .writer import EmbeddingWriter
 
 logger = logging.getLogger(__name__)
 

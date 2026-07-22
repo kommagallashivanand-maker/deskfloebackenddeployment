@@ -22,3 +22,4 @@ DEVICE = "cpu"
 NORMALIZE_EMBEDDINGS = True
 
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+INDEX_FILE = OUTPUT_DIR / "index.faiss"

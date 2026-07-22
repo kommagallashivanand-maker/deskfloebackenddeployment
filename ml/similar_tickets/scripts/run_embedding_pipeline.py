@@ -5,7 +5,7 @@ This script is intended for local development and testing.
 """
 
 import logging
-from embeddings.pipeline import EmbeddingPipeline
+from ml.similar_tickets.embeddings.pipeline import EmbeddingPipeline
 
 logging.basicConfig(
     level=logging.INFO,
