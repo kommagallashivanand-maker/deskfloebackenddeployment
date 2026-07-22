@@ -138,24 +138,27 @@ jobs:
 
       - name: Run pytest with coverage
         id: run-tests
+        env:
+          REPORTS_DIR: security-reports
+          COV_THRESHOLD: 60
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           if [ "${{ steps.detect-tests.outputs.has_tests }}" = "true" ]; then
             set +e
-            pytest --cov=. --cov-report=xml:${{ env.REPORTS_DIR }}/coverage.xml \
+            pytest --cov=. \
+                   --cov-report=xml:"$REPORTS_DIR/coverage.xml" \
                    --cov-report=term-missing \
-                   --cov-fail-under=${{ env.COVERAGE_THRESHOLD }} \
-                   -q 2>&1 | tee ${{ env.REPORTS_DIR }}/pytest-output.txt
+                   --cov-fail-under="$COV_THRESHOLD" \
+                   -q 2>&1 | tee "$REPORTS_DIR/pytest-output.txt"
             EXIT_CODE=$?
             set -e
             # Extract numeric coverage from XML
-            COV_XML="${{ env.REPORTS_DIR }}/coverage.xml"
-            PCT=$(python - "$COV_XML" <<'PYEOF'
+            PCT=$(python - "$REPORTS_DIR/coverage.xml" <<'PYEOF'
 import xml.etree.ElementTree as ET, sys
 try:
     root = ET.parse(sys.argv[1]).getroot()
     print(round(float(root.attrib.get("line-rate","0"))*100,2))
-except Exception as e:
+except Exception:
     print("0")
 PYEOF
 )
@@ -168,8 +171,8 @@ PYEOF
               exit $EXIT_CODE
             fi
           else
-            echo "tests_ran=false"        >> "$GITHUB_OUTPUT"
-            echo "coverage_pct=N/A"       >> "$GITHUB_OUTPUT"
+            echo "tests_ran=false"         >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A"        >> "$GITHUB_OUTPUT"
             echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
           fi
 
@@ -223,18 +226,19 @@ PYEOF
       - name: Run Maven tests + JaCoCo
         id: run-tests
         if: steps.detect-java.outputs.has_tests == 'true' && steps.detect-java.outputs.build_tool == 'maven'
+        env:
+          REPORTS_DIR: security-reports
+          COV_THRESHOLD: 60
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           set +e
-          mvn -B verify jacoco:report 2>&1 | tee ${{ env.REPORTS_DIR }}/maven-output.txt
+          mvn -B verify jacoco:report 2>&1 | tee "$REPORTS_DIR/maven-output.txt"
           EXIT_CODE=$?
           set -e
-          # Try to read JaCoCo XML coverage
           JACOCO=$(find . -name "jacoco.xml" | head -1)
           if [ -n "$JACOCO" ]; then
-            cp "$JACOCO" ${{ env.REPORTS_DIR }}/jacoco.xml
-            JACOCO_XML="${{ env.REPORTS_DIR }}/jacoco.xml"
-            PCT=$(python3 - "$JACOCO_XML" <<'PYEOF'
+            cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"
+            PCT=$(python3 - "$REPORTS_DIR/jacoco.xml" <<'PYEOF'
 import xml.etree.ElementTree as ET, sys
 try:
     root = ET.parse(sys.argv[1]).getroot()
@@ -245,9 +249,8 @@ try:
 except: print("0")
 PYEOF
 )
-            echo "coverage_pct=$PCT"   >> "$GITHUB_OUTPUT"
-            THRESHOLD=${{ env.COVERAGE_THRESHOLD }}
-            if awk "BEGIN{exit !($PCT < $THRESHOLD)}"; then
+            echo "coverage_pct=$PCT" >> "$GITHUB_OUTPUT"
+            if awk "BEGIN{exit !($PCT < $COV_THRESHOLD)}"; then
               echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"
               exit 1
             else
@@ -263,19 +266,21 @@ PYEOF
       - name: Run Gradle tests + JaCoCo
         id: run-gradle
         if: steps.detect-java.outputs.has_tests == 'true' && steps.detect-java.outputs.build_tool == 'gradle'
+        env:
+          REPORTS_DIR: security-reports
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           set +e
-          ./gradlew test jacocoTestReport 2>&1 | tee ${{ env.REPORTS_DIR }}/gradle-output.txt
+          ./gradlew test jacocoTestReport 2>&1 | tee "$REPORTS_DIR/gradle-output.txt"
           EXIT_CODE=$?
           set -e
           JACOCO=$(find . -name "jacocoTestReport.xml" | head -1)
           if [ -n "$JACOCO" ]; then
-            cp "$JACOCO" ${{ env.REPORTS_DIR }}/jacoco.xml
+            cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"
           fi
-          echo "tests_ran=true" >> "$GITHUB_OUTPUT"
-          echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
-          echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+          echo "tests_ran=true"         >> "$GITHUB_OUTPUT"
+          echo "coverage_pct=N/A"       >> "$GITHUB_OUTPUT"
+          echo "coverage_status=PASS"   >> "$GITHUB_OUTPUT"
           exit $EXIT_CODE
 
       - name: Skip tests (none found)
@@ -322,41 +327,37 @@ PYEOF
       - name: pip-audit
         id: pip-audit
         if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        env:
+          REPORTS_DIR: security-reports
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           pip install pip-audit
           set +e
           pip-audit \
             $([ -f requirements.txt ] && echo "-r requirements.txt" || true) \
             --format json \
-            --output ${{ env.REPORTS_DIR }}/dependency-audit.json 2>&1
+            --output "$REPORTS_DIR/dependency-audit.json" 2>&1
           set -e
-          # Parse counts
-          python3 - <<'PYEOF'
-import json, sys
+          python3 - "$REPORTS_DIR/dependency-audit.json" <<'PYEOF'
+import json, sys, os
 try:
-    data = json.load(open("${{ env.REPORTS_DIR }}/dependency-audit.json"))
+    data = json.load(open(sys.argv[1]))
     vulns = data.get("vulnerabilities", [])
     total = len(vulns)
-    ch    = sum(1 for v in vulns
-                for fix in v.get("fix_versions", [])
-                if True  # pip-audit doesn't tag severity; count all
-               )
-    # pip-audit marks severity in aliases when available; count HIGH/CRITICAL via id prefix
     crit_high = sum(
         1 for v in vulns
         if any(a.upper().startswith(("GHSA","CVE")) for a in v.get("aliases",[]))
     )
     print(f"TOTAL={total}")
     print(f"CRIT_HIGH={crit_high}")
-    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write(f"total_vulns={total}\n")
         f.write(f"critical_high={crit_high}\n")
         f.write("tool=pip-audit\n")
         f.write(f"audit_status={'FAIL' if crit_high > 0 else 'PASS'}\n")
 except Exception as e:
     print(f"Parse error: {e}")
-    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write("total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS\n")
 PYEOF
 
@@ -376,34 +377,36 @@ PYEOF
       - name: Trivy filesystem scan
         id: trivy-scan
         if: needs.detect.outputs.project_type == 'java'
+        env:
+          REPORTS_DIR: security-reports
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           set +e
           trivy fs . \
             --exit-code 0 \
             --severity HIGH,CRITICAL \
             --format json \
-            --output ${{ env.REPORTS_DIR }}/dependency-audit.json
+            --output "$REPORTS_DIR/dependency-audit.json"
           set -e
-          python3 - <<'PYEOF'
-import json
+          python3 - "$REPORTS_DIR/dependency-audit.json" <<'PYEOF'
+import json, sys, os
 try:
-    data   = json.load(open("${{ env.REPORTS_DIR }}/dependency-audit.json"))
+    data    = json.load(open(sys.argv[1]))
     results = data.get("Results", [])
-    total  = sum(len(r.get("Vulnerabilities") or []) for r in results)
-    ch     = sum(
+    total   = sum(len(r.get("Vulnerabilities") or []) for r in results)
+    ch      = sum(
         1 for r in results
         for v in (r.get("Vulnerabilities") or [])
         if v.get("Severity","").upper() in ("HIGH","CRITICAL")
     )
-    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write(f"total_vulns={total}\n")
         f.write(f"critical_high={ch}\n")
         f.write("tool=Trivy\n")
         f.write(f"audit_status={'FAIL' if ch > 0 else 'PASS'}\n")
 except Exception as e:
     print(f"Parse error: {e}")
-    with open("${{ env.GITHUB_OUTPUT }}", "a") as f:
+    with open(os.environ["GITHUB_OUTPUT"], "a") as f:
         f.write("total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS\n")
 PYEOF
 
@@ -471,8 +474,10 @@ PYEOF
 
       - name: Run Semgrep
         id: semgrep
+        env:
+          REPORTS_DIR: security-reports
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           FILES="${{ steps.changed-files.outputs.changed_files }}"
           if [ -z "$FILES" ]; then
             echo "No scannable files changed – running project-wide scan."
@@ -483,20 +488,19 @@ PYEOF
           set +e
           semgrep --config=auto \
             --json \
-            --output ${{ env.REPORTS_DIR }}/semgrep-report.json \
+            --output "$REPORTS_DIR/semgrep-report.json" \
             $SCAN_TARGET 2>&1
           set -e
-          python3 - <<'PYEOF'
-import json, os
+          python3 - "$REPORTS_DIR/semgrep-report.json" <<'PYEOF'
+import json, os, sys
 try:
-    data     = json.load(open("${{ env.REPORTS_DIR }}/semgrep-report.json"))
-    results  = data.get("results", [])
-    total    = len(results)
-    sev_map  = {}
+    data    = json.load(open(sys.argv[1]))
+    results = data.get("results", [])
+    total   = len(results)
+    sev_map = {}
     for r in results:
         sev = r.get("extra", {}).get("severity", "UNKNOWN").upper()
         sev_map[sev] = sev_map.get(sev, 0) + 1
-    ch = sev_map.get("ERROR", 0) + sev_map.get("WARNING", 0)
     summary = ", ".join(f"{k}:{v}" for k,v in sev_map.items()) or "none"
     status  = "FAIL" if sev_map.get("ERROR", 0) > 0 else "PASS"
     out = os.environ["GITHUB_OUTPUT"]
@@ -549,34 +553,34 @@ PYEOF
 
       - name: Run Gitleaks on commit range
         id: gitleaks
+        env:
+          REPORTS_DIR: security-reports
         run: |
-          mkdir -p ${{ env.REPORTS_DIR }}
+          mkdir -p "$REPORTS_DIR"
           BASE="${{ needs.detect.outputs.base_sha }}"
           HEAD="${{ needs.detect.outputs.head_sha }}"
-          # Ensure base ref is available
           git fetch origin "$BASE" 2>/dev/null || true
           set +e
           gitleaks detect \
             --source . \
             --log-opts "$BASE..$HEAD" \
             --report-format json \
-            --report-path ${{ env.REPORTS_DIR }}/gitleaks-report.json \
+            --report-path "$REPORTS_DIR/gitleaks-report.json" \
             --exit-code 1 \
             --no-banner 2>&1
           EXIT_CODE=$?
           set -e
-          python3 - <<'PYEOF'
-import json, os
+          python3 - "$REPORTS_DIR/gitleaks-report.json" <<'PYEOF'
+import json, os, sys
 try:
-    data   = json.load(open("${{ env.REPORTS_DIR }}/gitleaks-report.json"))
+    data   = json.load(open(sys.argv[1]))
     total  = len(data) if isinstance(data, list) else 0
     status = "FAIL" if total > 0 else "PASS"
     out    = os.environ["GITHUB_OUTPUT"]
     with open(out, "a") as f:
         f.write(f"secrets_found={total}\n")
         f.write(f"secret_status={status}\n")
-except Exception as e:
-    # Empty / missing report → no secrets
+except Exception:
     out = os.environ["GITHUB_OUTPUT"]
     with open(out, "a") as f:
         f.write("secrets_found=0\nsecret_status=PASS\n")
