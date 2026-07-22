@@ -1,6 +1,5 @@
 name: Security CI
 
-
 on:
   push:
     branches:
@@ -17,6 +16,12 @@ env:
   COV_THRESHOLD: "80"
 
 jobs:
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 1: DETECT PROJECT TYPE AND COMMIT RANGE
+  # Purpose: Identifies the project type (python-ml, fastapi, java) and determines
+  #          the commit range for this CI run (for PR or push events)
+  # Output: project_type, commit_range, base_sha, head_sha
+  # ══════════════════════════════════════════════════════════════════════════════
   detect:
     name: Detect Project and Commit Range
     runs-on: ubuntu-latest
@@ -30,6 +35,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Resolve the commit range based on event type (PR vs push)
       - name: Resolve commit range
         id: range
         run: |
@@ -44,6 +50,7 @@ jobs:
           echo "head_sha=${HEAD}" >> "$GITHUB_OUTPUT"
           echo "commit_range=${BASE}..${HEAD}" >> "$GITHUB_OUTPUT"
 
+      # Detect project type by looking for config files
       - name: Detect project type
         id: detect
         run: |
@@ -69,6 +76,13 @@ jobs:
           echo "project_type=${TYPE}" >> "$GITHUB_OUTPUT"
           echo "Detected: ${TYPE}"
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 2: PYTHON TESTS AND COVERAGE
+  # Purpose: Runs pytest with code coverage for Python projects (python-ml, fastapi)
+  #          Generates coverage reports and fails if coverage is below threshold (60%)
+  # Runs if: Project type is python-ml or fastapi
+  # Output: tests_ran, coverage_pct, coverage_status
+  # ══════════════════════════════════════════════════════════════════════════════
   test-python:
     name: Tests and Coverage (Python)
     needs: detect
@@ -88,6 +102,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
 
+      # Find the main Python project directory containing tests
       - name: Detect Python project directory
         id: pydir
         run: |
@@ -104,6 +119,7 @@ jobs:
           echo "pydir=${PYDIR}" >> "$GITHUB_OUTPUT"
           echo "Project dir: ${PYDIR}"
 
+      # Install all dependencies including test requirements
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -114,6 +130,7 @@ jobs:
           if [ "$PYDIR" != "." ] && [ -f "$PYDIR/pyproject.toml" ]; then pip install -e "$PYDIR" || true; fi
           pip install pytest pytest-cov pip-audit fastapi pydantic-settings httpx
 
+      # Check if test files exist in the project
       - name: Detect tests
         id: has-tests
         run: |
@@ -124,6 +141,7 @@ jobs:
             echo "found=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Run pytest with coverage reports (XML, JSON, terminal)
       - name: Run pytest with coverage
         id: run-tests
         env:
@@ -160,6 +178,7 @@ jobs:
             echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
           fi
 
+      # Upload coverage reports to artifacts
       - name: Upload coverage report
         if: steps.has-tests.outputs.found == 'true'
         uses: actions/upload-artifact@v4
@@ -170,6 +189,13 @@ jobs:
             security-reports/coverage.json
             security-reports/pytest-output.txt
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 3: JAVA TESTS AND COVERAGE
+  # Purpose: Runs Maven/Gradle tests with JaCoCo code coverage for Java projects
+  #          Generates coverage reports and fails if coverage is below threshold (60%)
+  # Runs if: Project type is java
+  # Output: tests_ran, coverage_pct, coverage_status
+  # ══════════════════════════════════════════════════════════════════════════════
   test-java:
     name: Tests and Coverage (Java)
     needs: detect
@@ -189,6 +215,7 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: temurin
 
+      # Detect build tool (Maven or Gradle) and check for test files
       - name: Detect build tool and tests
         id: java-detect
         run: |
@@ -205,6 +232,7 @@ jobs:
             echo "has_tests=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Run Maven tests with JaCoCo coverage
       - name: Run Maven tests
         id: maven
         if: steps.java-detect.outputs.has_tests == 'true' && steps.java-detect.outputs.tool == 'maven'
@@ -234,6 +262,7 @@ jobs:
           echo "tests_ran=true" >> "$GITHUB_OUTPUT"
           exit "$EXIT_CODE"
 
+      # Run Gradle tests with JaCoCo coverage
       - name: Run Gradle tests
         id: gradle
         if: steps.java-detect.outputs.has_tests == 'true' && steps.java-detect.outputs.tool == 'gradle'
@@ -252,6 +281,7 @@ jobs:
           echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
           exit "$EXIT_CODE"
 
+      # Consolidate results from Maven or Gradle
       - name: Consolidate results
         id: results
         run: |
@@ -269,6 +299,7 @@ jobs:
             echo "coverage_status=${{ steps.gradle.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Upload JaCoCo coverage report to artifacts
       - name: Upload JaCoCo report
         if: steps.java-detect.outputs.has_tests == 'true'
         uses: actions/upload-artifact@v4
@@ -277,6 +308,14 @@ jobs:
           path: security-reports/jacoco.xml
           if-no-files-found: ignore
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 4: DEPENDENCY AUDIT AND VULNERABILITY SCANNING
+  # Purpose: Scans project dependencies for known vulnerabilities using:
+  #          - pip-audit for Python projects
+  #          - Trivy for Java projects
+  #          Fails if critical or high severity vulnerabilities are found
+  # Output: tool, total_vulns, critical_high, audit_status
+  # ══════════════════════════════════════════════════════════════════════════════
   dependency-audit:
     name: Dependency Audit
     needs: detect
@@ -291,12 +330,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Set up Python for pip-audit (Python projects)
       - name: Set up Python
         if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # Scan Python dependencies with pip-audit
       - name: Run pip-audit
         id: pip-audit
         if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
@@ -312,6 +353,7 @@ jobs:
           set -e
           python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/dependency-audit.json')); v=d.get('vulnerabilities',[]); t=len(v); ch=sum(1 for x in v if any(a.upper().startswith(('GHSA','CVE')) for a in x.get('aliases',[]))); f=open(os.environ['GITHUB_OUTPUT'],'a'); f.write(f'total_vulns={t}\ncritical_high={ch}\ntool=pip-audit\naudit_status=' + ('FAIL' if ch>0 else 'PASS') + '\n')" 2>/dev/null || echo "total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS" >> "$GITHUB_OUTPUT"
 
+      # Install Trivy for Java dependency scanning
       - name: Install Trivy
         if: needs.detect.outputs.project_type == 'java'
         run: |
@@ -322,6 +364,7 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/trivy.list
           sudo apt-get update -qq && sudo apt-get install -y trivy
 
+      # Scan Java dependencies with Trivy
       - name: Run Trivy scan
         id: trivy
         if: needs.detect.outputs.project_type == 'java'
@@ -335,6 +378,7 @@ jobs:
           set -e
           python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/dependency-audit.json')); res=d.get('Results',[]); t=sum(len(r.get('Vulnerabilities') or []) for r in res); ch=sum(1 for r in res for v in (r.get('Vulnerabilities') or []) if v.get('Severity','').upper() in ('HIGH','CRITICAL')); open(os.environ['GITHUB_OUTPUT'],'a').write(f'total_vulns={t}\ncritical_high={ch}\ntool=Trivy\naudit_status=' + ('FAIL' if ch>0 else 'PASS') + '\n')" 2>/dev/null || echo "total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS" >> "$GITHUB_OUTPUT"
 
+      # Consolidate results from pip-audit or Trivy
       - name: Consolidate audit outputs
         id: audit
         run: |
@@ -350,10 +394,12 @@ jobs:
             echo "audit_status=${{ steps.trivy.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Fail the workflow if critical/high vulnerabilities found
       - name: Fail on high or critical vulnerabilities
         if: steps.audit.outputs.audit_status == 'FAIL'
         run: exit 1
 
+      # Upload dependency audit report to artifacts
       - name: Upload audit report
         uses: actions/upload-artifact@v4
         with:
@@ -361,6 +407,14 @@ jobs:
           path: security-reports/dependency-audit.json
           if-no-files-found: ignore
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 5: STATIC APPLICATION SECURITY TESTING (SAST) WITH SEMGREP
+  # Purpose: Scans source code for security issues, code smells, and best practices
+  #          using Semgrep with auto config rules
+  #          Generates detailed report with file paths and line numbers
+  #          Fails if ERROR severity findings are detected
+  # Output: semgrep_findings, sast_status, severity_summary
+  # ══════════════════════════════════════════════════════════════════════════════
   sast:
     name: SAST Semgrep
     needs: detect
@@ -374,23 +428,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Install Semgrep tool
       - name: Install Semgrep
         run: pip install semgrep
 
-      - name: Resolve changed files
-        id: changed
-        run: |
-          BASE="${{ needs.detect.outputs.base_sha }}"
-          HEAD="${{ needs.detect.outputs.head_sha }}"
-
-          git fetch origin "$BASE" 2>/dev/null || true
-
-          FILES=$(git diff --name-only "$BASE" "$HEAD" \
-            | grep -E '\.(py|java|js|ts|go|rb|php|sh)$' \
-            | tr '\n' ' ')
-
-          echo "files=$FILES" >> "$GITHUB_OUTPUT"
-
+      # Scan entire codebase for supported file types
       - name: Run Semgrep
         id: semgrep
         env:
@@ -398,15 +440,14 @@ jobs:
         run: |
           mkdir -p "$REPORTS_DIR"
 
-          FILES="${{ steps.changed.outputs.files }}"
-          SCAN_TARGET="${FILES:-.}"
-
+          # Scan entire repository - Semgrep automatically filters by supported languages
           semgrep \
             --config=auto \
             --json \
             --output "$REPORTS_DIR/semgrep-report.json" \
-            $SCAN_TARGET
+            .
 
+          # Parse JSON results and generate human-readable report with file paths and line numbers
           python3 <<'EOF'
           import json
           import os
@@ -474,10 +515,12 @@ jobs:
               f.write(f"sast_status={status}\n")
           EOF
 
+      # Fail the workflow if ERROR severity findings detected
       - name: Fail on high or critical SAST findings
         if: steps.semgrep.outputs.sast_status == 'FAIL'
         run: exit 1
 
+      # Upload Semgrep reports to artifacts (JSON + human-readable)
       - name: Upload Semgrep Report
         uses: actions/upload-artifact@v4
         with:
@@ -486,6 +529,13 @@ jobs:
             security-reports/semgrep-report.json
             security-reports/semgrep_report(SAST).txt
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 6: SECRET DETECTION WITH GITLEAKS
+  # Purpose: Scans repository for exposed secrets (API keys, passwords, tokens, etc.)
+  #          using Gitleaks
+  #          Fails if any secrets are detected in the changed commits
+  # Output: secrets_found, secret_status
+  # ══════════════════════════════════════════════════════════════════════════════
   secret-scan:
     name: Secret Detection Gitleaks
     needs: detect
@@ -498,6 +548,7 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Install Gitleaks tool
       - name: Install Gitleaks
         run: |
           GITLEAKS_VERSION="8.18.4"
@@ -505,6 +556,7 @@ jobs:
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
+      # Run Gitleaks to detect secrets in changed commits
       - name: Run Gitleaks
         id: gitleaks
         env:
@@ -525,6 +577,7 @@ jobs:
           python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/gitleaks-report.json')); t=len(d) if isinstance(d,list) else 0; st='FAIL' if t>0 else 'PASS'; open(os.environ['GITHUB_OUTPUT'],'a').write(f'secrets_found={t}\nsecret_status={st}\n')" 2>/dev/null || echo "secrets_found=0\nsecret_status=PASS" >> "$GITHUB_OUTPUT"
           if [ "$EXIT_CODE" -ne 0 ]; then exit 1; fi
 
+      # Upload Gitleaks report to artifacts (even if secrets found - always() ensures this runs)
       - name: Upload Gitleaks report
         if: always()
         uses: actions/upload-artifact@v4
@@ -533,6 +586,14 @@ jobs:
           path: security-reports/gitleaks-report.json
           if-no-files-found: ignore
 
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 7: GENERATE COMPREHENSIVE SECURITY REPORT
+  # Purpose: Consolidates all security scan results from previous jobs into a
+  #          comprehensive PDF report with coverage, vulnerabilities, SAST findings,
+  #          and secret detection results
+  # Runs: Always (after all other jobs complete)
+  # Dependencies: detect, test-python, test-java, dependency-audit, sast, secret-scan
+  # ══════════════════════════════════════════════════════════════════════════════
   report:
     name: Generate Security Report
     needs: [detect, test-python, test-java, dependency-audit, sast, secret-scan]
@@ -545,15 +606,18 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      # Install PDF generation library
       - name: Install report dependencies
         run: pip install reportlab
 
+      # Download all artifacts from previous jobs
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: downloaded-artifacts
         continue-on-error: true
 
+      # Generate final PDF report by combining all test results and security findings
       - name: Generate PDF report
         env:
           PROJECT_TYPE: ${{ needs.detect.outputs.project_type }}
@@ -573,6 +637,7 @@ jobs:
           COV_THRESHOLD: ${{ env.COV_THRESHOLD }}
         run: python3 .github/scripts/gen_security_report.py
 
+      # Upload final PDF security report to artifacts
       - name: Upload security report PDF
         uses: actions/upload-artifact@v4
         with:
