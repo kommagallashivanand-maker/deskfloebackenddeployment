@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Model artefacts (tracked selectively via Git LFS if needed)
+models/*.pkl
+
+# Environment files
+.env
+
+# OS artefacts
+.DS_Store
+Thumbs.db

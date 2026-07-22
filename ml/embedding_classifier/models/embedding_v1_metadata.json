@@ -1,0 +1,26 @@
+{
+    "model_version": "embedding_v1",
+    "training_date": "2026-07-22T13:52:37.595724+00:00",
+    "dataset_version": "tickets_v1",
+    "random_seed": 42,
+    "train_size": 1608,
+    "test_size": 402,
+    "classes": [
+        "Account Access",
+        "Billing",
+        "Data Management",
+        "Feature Request",
+        "General Inquiry",
+        "Notifications",
+        "Performance",
+        "Security",
+        "Subscription",
+        "Technical"
+    ],
+    "embedding_model": "all-MiniLM-L6-v2",
+    "classifier": "LogisticRegression",
+    "accuracy": 0.7761194029850746,
+    "macro_f1": 0.7719828711138372,
+    "weighted_f1": 0.7725412974337588,
+    "sklearn_version": "1.9.0"
+}
