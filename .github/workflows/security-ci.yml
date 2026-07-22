@@ -440,13 +440,13 @@ jobs:
         run: |
           mkdir -p "$REPORTS_DIR"
 
-          # Scan entire repository - Semgrep automatically filters by supported languages
-          semgrep \
-            --config=auto \
-            --json \
-            --output "$REPORTS_DIR/semgrep-report.json" \
-            .
-
+          # Allow semgrep to return non-zero without failing the step so we can parse the JSON report
+          set +e
+          semgrep --config=auto --json --output "$REPORTS_DIR/semgrep-report.json" . --exit-code 0
+          SEMGREP_EXIT=$?
+          echo "semgrep_exit_code=${SEMGREP_EXIT}" > "$REPORTS_DIR/semgrep-exit.txt"
+          set -e
+          
           # Parse JSON results and generate human-readable report with file paths and line numbers
           python3 <<'EOF'
           import json
@@ -522,12 +522,14 @@ jobs:
 
       # Upload Semgrep reports to artifacts (JSON + human-readable)
       - name: Upload Semgrep Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: semgrep_report(SAST)
           path: |
             security-reports/semgrep-report.json
             security-reports/semgrep_report(SAST).txt
+            security-reports/semgrep-exit.txt
 
   # ══════════════════════════════════════════════════════════════════════════════
   # JOB 6: SECRET DETECTION WITH GITLEAKS
