@@ -1,3 +1,14 @@
+
+# Local persistent data
+bi/metabase-data/
+bi/postgres-data/
+
+# Logs
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
 # Environment Files
 .env
 .env.*
