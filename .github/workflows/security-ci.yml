@@ -149,10 +149,11 @@ jobs:
             EXIT_CODE=$?
             set -e
             # Extract numeric coverage from XML
-            PCT=$(python - <<'PYEOF'
+            COV_XML="${{ env.REPORTS_DIR }}/coverage.xml"
+            PCT=$(python - "$COV_XML" <<'PYEOF'
 import xml.etree.ElementTree as ET, sys
 try:
-    root = ET.parse("${{ env.REPORTS_DIR }}/coverage.xml").getroot()
+    root = ET.parse(sys.argv[1]).getroot()
     print(round(float(root.attrib.get("line-rate","0"))*100,2))
 except Exception as e:
     print("0")
@@ -232,10 +233,11 @@ PYEOF
           JACOCO=$(find . -name "jacoco.xml" | head -1)
           if [ -n "$JACOCO" ]; then
             cp "$JACOCO" ${{ env.REPORTS_DIR }}/jacoco.xml
-            PCT=$(python3 - <<'PYEOF'
-import xml.etree.ElementTree as ET
+            JACOCO_XML="${{ env.REPORTS_DIR }}/jacoco.xml"
+            PCT=$(python3 - "$JACOCO_XML" <<'PYEOF'
+import xml.etree.ElementTree as ET, sys
 try:
-    root = ET.parse("${{ env.REPORTS_DIR }}/jacoco.xml").getroot()
+    root = ET.parse(sys.argv[1]).getroot()
     missed=int(root.find('.//counter[@type="LINE"]').get('missed',0))
     covered=int(root.find('.//counter[@type="LINE"]').get('covered',0))
     total=missed+covered
