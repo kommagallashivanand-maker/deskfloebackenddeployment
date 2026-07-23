@@ -1,0 +1,43 @@
+{
+  "timestamp": "2026-07-18T10:30:00.000000+00:00",
+  "git_commit": "a1b2c3d",
+  "predictions": [
+    {"ticket_id": "TKT-01001", "model": "category_baseline", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.82},
+    {"ticket_id": "TKT-01002", "model": "category_baseline", "true_label": "Billing", "predicted_label": "Billing", "confidence": 0.75},
+    {"ticket_id": "TKT-01003", "model": "category_baseline", "true_label": "General Inquiry", "predicted_label": "General Inquiry", "confidence": 0.68},
+    {"ticket_id": "TKT-01004", "model": "category_baseline", "true_label": "Technical", "predicted_label": "Billing", "confidence": 0.55},
+    {"ticket_id": "TKT-01005", "model": "category_baseline", "true_label": "Account Management", "predicted_label": "Account Management", "confidence": 0.71},
+    {"ticket_id": "TKT-01001", "model": "category_embeddings", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.91},
+    {"ticket_id": "TKT-01002", "model": "category_embeddings", "true_label": "Billing", "predicted_label": "Billing", "confidence": 0.88},
+    {"ticket_id": "TKT-01003", "model": "category_embeddings", "true_label": "General Inquiry", "predicted_label": "General Inquiry", "confidence": 0.79},
+    {"ticket_id": "TKT-01004", "model": "category_embeddings", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.84},
+    {"ticket_id": "TKT-01005", "model": "category_embeddings", "true_label": "Account Management", "predicted_label": "Account Management", "confidence": 0.82},
+    {"ticket_id": "TKT-01001", "model": "priority_model", "true_label": "High", "predicted_label": "High", "confidence": 0.77},
+    {"ticket_id": "TKT-01002", "model": "priority_model", "true_label": "Medium", "predicted_label": "Medium", "confidence": 0.65},
+    {"ticket_id": "TKT-01003", "model": "priority_model", "true_label": "Low", "predicted_label": "Low", "confidence": 0.81},
+    {"ticket_id": "TKT-01004", "model": "priority_model", "true_label": "Urgent", "predicted_label": "High", "confidence": 0.52},
+    {"ticket_id": "TKT-01005", "model": "priority_model", "true_label": "Medium", "predicted_label": "Medium", "confidence": 0.73}
+  ],
+  "aggregate_metrics": {
+    "category_baseline_f1": {
+      "Technical": 0.72,
+      "Billing": 0.68,
+      "General Inquiry": 0.75,
+      "Account Management": 0.65,
+      "Product Issue": 0.61
+    },
+    "category_embeddings_f1": {
+      "Technical": 0.85,
+      "Billing": 0.82,
+      "General Inquiry": 0.88,
+      "Account Management": 0.79,
+      "Product Issue": 0.76
+    },
+    "priority_precision_recall": {
+      "Urgent": {"precision": 0.58, "recall": 0.62},
+      "High": {"precision": 0.75, "recall": 0.71},
+      "Medium": {"precision": 0.82, "recall": 0.79},
+      "Low": {"precision": 0.86, "recall": 0.84}
+    }
+  }
+}

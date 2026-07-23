@@ -1,0 +1,76 @@
+# =============================================================================
+# Dockerfile.priority-feature-extraction
+# DeskFlow Priority Feature Extraction Service (FastAPI)
+#
+# Service:     Priority Feature Extraction
+# Framework:   FastAPI + Uvicorn
+# Python:      3.11
+# Port:        8001
+# ML Models:   spaCy (en_core_web_sm via wheel in requirements.txt),
+#              VADER Sentiment, YAKE keyword extraction
+# =============================================================================
+
+# --- Stage 1: Dependency Builder ---
+FROM python:3.11-slim AS builder
+
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /build
+
+# Copy requirements first to leverage Docker layer cache.
+# NOTE: requirements.txt already includes the spaCy en_core_web_sm wheel URL,
+# so no separate 'spacy download' step is needed.
+COPY ml/priority_feature_extraction/requirements.txt ./requirements.txt
+
+# Install all dependencies (including spaCy + en_core_web_sm model wheel)
+# into an isolated prefix for a clean copy to the runtime stage.
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+
+# --- Stage 2: Production Runtime ---
+FROM python:3.11-slim AS runtime
+
+# Labels for image metadata
+LABEL maintainer="DeskFlow Team" \
+      service="priority-feature-extraction" \
+      description="DeskFlow Priority Feature Extraction - Extracts ML features from support tickets" \
+      version="1.0.0"
+
+# Security hardening
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH="/app"
+
+# Create a non-root user and group for security
+RUN groupadd --gid 1001 appgroup && \
+    useradd --uid 1001 --gid 1001 --no-create-home --shell /bin/false appuser
+
+# Copy installed packages (including spaCy + model) from the builder stage
+COPY --from=builder /install /usr/local
+
+WORKDIR /app
+
+# Copy application source code and sample data
+# sample_data contains category_mapping.json and domain_acronyms.json
+# which are needed at runtime as per config defaults
+COPY --chown=appuser:appgroup ml/priority_feature_extraction/app ./app
+COPY --chown=appuser:appgroup ml/priority_feature_extraction/sample_data ./sample_data
+
+# Switch to non-root user
+USER appuser
+
+# Expose the service port
+# Using 8001 to avoid conflict with ml-service on port 8000
+EXPOSE 8001
+
+# Healthcheck — polls the /health endpoint to confirm service is alive
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')" || exit 1
+
+# Start the FastAPI application with Uvicorn
+# --workers 1 for predictable ML model loading; scale horizontally via Compose
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]

@@ -5,7 +5,7 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/deskflow}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:dEEpu@28}
+    password: ${DB_PASSWORD:root}
     driver-class-name: org.postgresql.Driver
 
   jpa:
