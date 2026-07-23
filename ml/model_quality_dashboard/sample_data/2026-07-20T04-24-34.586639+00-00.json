@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-07-20T04:24:34.586639+00:00",
+  "git_commit": "b9f3e21",
+  "predictions": [
+    {"ticket_id": "TKT-02001", "model": "category_baseline", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.812},
+    {"ticket_id": "TKT-02002", "model": "category_baseline", "true_label": "Billing", "predicted_label": "Billing", "confidence": 0.745},
+    {"ticket_id": "TKT-02003", "model": "category_baseline", "true_label": "General Inquiry", "predicted_label": "General Inquiry", "confidence": 0.691},
+    {"ticket_id": "TKT-02004", "model": "category_baseline", "true_label": "Product Issue", "predicted_label": "Technical", "confidence": 0.578},
+    {"ticket_id": "TKT-02005", "model": "category_baseline", "true_label": "Account Management", "predicted_label": "Account Management", "confidence": 0.733},
+    {"ticket_id": "TKT-02006", "model": "category_baseline", "true_label": "Billing", "predicted_label": "Billing", "confidence": 0.788},
+    {"ticket_id": "TKT-02007", "model": "category_baseline", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.856},
+    {"ticket_id": "TKT-02008", "model": "category_baseline", "true_label": "General Inquiry", "predicted_label": "Account Management", "confidence": 0.523},
+    {"ticket_id": "TKT-02001", "model": "category_embeddings", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.923},
+    {"ticket_id": "TKT-02002", "model": "category_embeddings", "true_label": "Billing", "predicted_label": "Billing", "confidence": 0.901},
+    {"ticket_id": "TKT-02003", "model": "category_embeddings", "true_label": "General Inquiry", "predicted_label": "General Inquiry", "confidence": 0.867},
+    {"ticket_id": "TKT-02004", "model": "category_embeddings", "true_label": "Product Issue", "predicted_label": "Product Issue", "confidence": 0.834},
+    {"ticket_id": "TKT-02005", "model": "category_embeddings", "true_label": "Account Management", "predicted_label": "Account Management", "confidence": 0.889},
+    {"ticket_id": "TKT-02006", "model": "category_embeddings", "true_label": "Billing", "predicted_label": "Billing", "confidence": 0.912},
+    {"ticket_id": "TKT-02007", "model": "category_embeddings", "true_label": "Technical", "predicted_label": "Technical", "confidence": 0.945},
+    {"ticket_id": "TKT-02008", "model": "category_embeddings", "true_label": "General Inquiry", "predicted_label": "General Inquiry", "confidence": 0.878},
+    {"ticket_id": "TKT-02001", "model": "priority_model", "true_label": "High", "predicted_label": "High", "confidence": 0.801},
+    {"ticket_id": "TKT-02002", "model": "priority_model", "true_label": "Medium", "predicted_label": "Medium", "confidence": 0.734},
+    {"ticket_id": "TKT-02003", "model": "priority_model", "true_label": "Low", "predicted_label": "Low", "confidence": 0.845},
+    {"ticket_id": "TKT-02004", "model": "priority_model", "true_label": "Urgent", "predicted_label": "Urgent", "confidence": 0.623},
+    {"ticket_id": "TKT-02005", "model": "priority_model", "true_label": "Medium", "predicted_label": "Medium", "confidence": 0.778},
+    {"ticket_id": "TKT-02006", "model": "priority_model", "true_label": "Low", "predicted_label": "Low", "confidence": 0.891},
+    {"ticket_id": "TKT-02007", "model": "priority_model", "true_label": "High", "predicted_label": "High", "confidence": 0.823},
+    {"ticket_id": "TKT-02008", "model": "priority_model", "true_label": "Medium", "predicted_label": "Low", "confidence": 0.612}
+  ],
+  "aggregate_metrics": {
+    "category_baseline_f1": {
+      "Technical": 0.76,
+      "Billing": 0.72,
+      "General Inquiry": 0.74,
+      "Account Management": 0.69,
+      "Product Issue": 0.65
+    },
+    "category_embeddings_f1": {
+      "Technical": 0.89,
+      "Billing": 0.86,
+      "General Inquiry": 0.91,
+      "Account Management": 0.83,
+      "Product Issue": 0.80
+    },
+    "priority_precision_recall": {
+      "Urgent": {"precision": 0.65, "recall": 0.68},
+      "High": {"precision": 0.80, "recall": 0.76},
+      "Medium": {"precision": 0.85, "recall": 0.83},
+      "Low": {"precision": 0.89, "recall": 0.87}
+    }
+  }
+}
