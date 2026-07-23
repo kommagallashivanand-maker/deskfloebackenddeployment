@@ -6,6 +6,8 @@ DeskFlow is an internal helpdesk and ticketing platform designed to streamline s
 
 ## Database Entity-Relationship Diagram (ERD)
 
+
+Below is the entity-relationship model representing the database schema. It consists of five core tables: `teams`, `categories`, `users`, `tickets`, and `ticket_attachments`.
 Below is the entity-relationship model representing the database schema. It consists of four core tables: `teams`, `categories`, `users`, and `tickets`.
 
 ```mermaid
@@ -14,6 +16,7 @@ erDiagram
     CATEGORIES ||--o{ TICKETS : "classifies"
     USERS ||--o{ TICKETS : "creates (created_by)"
     USERS ||--o{ TICKETS : "handles (assigned_to)"
+    TICKETS ||--o{ TICKET_ATTACHMENTS : "has attachments"
 
     TEAMS {
         uuid id PK
@@ -72,6 +75,17 @@ erDiagram
         timestamp resolved_at
         timestamp closed_at
     }
+
+
+    TICKET_ATTACHMENTS {
+        uuid id PK
+        uuid ticket_id FK
+        varchar file_name
+        varchar file_url
+        varchar file_type
+        bigint file_size
+        timestamp created_at
+    }
 ```
 
 ### Table Details
@@ -79,6 +93,7 @@ erDiagram
 2. **Categories (`categories`)**: Categorizes tickets to enable correct routing (e.g., Network, Hardware).
 3. **Users (`users`)**: Represents all registered employees, agents, and admins.
 4. **Tickets (`tickets`)**: Tracks support issues, priority, state transitions, assignees, and resolution timestamps.
+5. **Ticket Attachments (`ticket_attachments`)**: Stores S3 file attachment metadata linked to tickets.
 
 ---
 
@@ -117,6 +132,13 @@ To run the backend service and execute migrations:
 | **GET** | `/api/v1/tickets/{id}` | Get detailed information of a ticket by UUID | `id` (Path variable) |
 | **PUT** | `/api/v1/tickets/{id}` | Update an existing ticket (supports partial updates) | `id` (Path variable), JSON Body |
 | **GET** | `/api/v1/tickets` | List tickets with pagination, sorting, and filters | `page`, `size`, `status`, `priority`, `category`, `assignee`, `sortBy`, `sortDir` |
+| Method | Endpoint | Description | Query Parameters / Content-Type |
+| :--- | :--- | :--- | :--- |
+| **POST** | `/api/v1/tickets` | Create a new ticket with optional file attachments (AWS S3) | `multipart/form-data` (`ticket` JSON string + optional `files` array) |
+| **GET** | `/api/v1/tickets/{id}` | Get detailed information of a ticket by UUID (returns 60-min pre-signed S3 URLs) | `id` (Path variable) |
+| **PUT** | `/api/v1/tickets/{id}` | Update an existing ticket (supports status transitions & `reopenCount`) | `id` (Path variable), JSON Body |
+| **GET** | `/api/v1/tickets` | List tickets with pagination, timeline sorting, multi-field search, and filters | `page`, `size`, `search`, `status`, `priority`, `category`, `assignee`, `sortBy`, `sortDir` |
+
 
 ---
 
@@ -126,4 +148,7 @@ The project features fully integrated OpenAPI 3/Swagger documentation conforming
 
 * **Interactive Swagger UI**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) — used to view, explore, and trigger REST API endpoints directly from your browser.
 * **Raw OpenAPI JSON Specs**: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs) — raw OpenAPI 3.0 specification definition.
+
+
+=======
 

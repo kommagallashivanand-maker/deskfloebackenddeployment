@@ -19,9 +19,6 @@ target/
 bi/metabase-data/
 bi/postgres-data/
 
-# Logs
-*.log
-
 # OS files
 .DS_Store
 Thumbs.db

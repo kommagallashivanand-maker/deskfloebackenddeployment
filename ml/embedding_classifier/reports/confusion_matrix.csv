@@ -1,0 +1,11 @@
+,Account Access,Billing,Data Management,Feature Request,General Inquiry,Notifications,Performance,Security,Subscription,Technical
+Account Access,37,0,0,0,1,0,0,2,0,0
+Billing,0,25,0,0,0,0,0,0,15,0
+Data Management,0,0,34,0,0,0,3,1,0,2
+Feature Request,0,0,0,40,0,0,0,1,0,0
+General Inquiry,1,1,0,2,31,2,0,0,3,0
+Notifications,1,0,0,0,1,38,0,0,0,0
+Performance,0,0,3,0,0,0,35,0,0,3
+Security,8,0,0,0,0,1,0,29,0,2
+Subscription,0,14,0,0,4,0,0,0,22,0
+Technical,0,0,10,0,0,1,8,0,0,21

@@ -21,6 +21,25 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import jakarta.validation.Valid;
 
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+import jakarta.validation.Valid;
+import org.springframework.http.MediaType;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.Validator;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @RestController
@@ -32,10 +51,19 @@ public class TicketController {
 
     private final TicketService ticketService;
 
+
     @PostMapping
     @Operation(
         summary = "Create a new ticket", 
         description = "Creates a ticket using the provided details. All mandatory fields (title, priority, categoryId, createdBy) must be present and valid."
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+    private final Validator validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
+
+    @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(
+        summary = "Create a new ticket (JSON)", 
+        description = "Creates a ticket using the provided details. All mandatory fields (title, categoryId, createdBy) must be present and valid."
     )
     @ApiResponses(value = {
         @ApiResponse(responseCode = "201", description = "Ticket successfully created", 
@@ -46,8 +74,43 @@ public class TicketController {
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
     })
     public ResponseEntity<TicketResponse> createTicket(@RequestBody @Valid TicketRequest request) {
+
         log.info("REST request to create ticket: {}", request.getTitle());
+
+        log.info("REST request to create ticket (JSON): {}", request.getTitle());
+      
         TicketResponse response = ticketService.createTicket(request);
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
+
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(
+        summary = "Create a new ticket with attachments (Multipart)", 
+        description = "Creates a ticket and uploads attachments in a single request. Send the ticket details as a JSON part named 'ticket', and files as 'files'."
+    )
+    @ApiResponses(value = {
+        @ApiResponse(responseCode = "201", description = "Ticket and attachments successfully created", 
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TicketResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid request payload or validation constraint violation", 
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "500", description = "Internal server error occurred", 
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
+    })
+    public ResponseEntity<TicketResponse> createTicketMultipart(
+            @RequestPart("ticket") String ticketJson,
+            @RequestPart(value = "files", required = false) List<MultipartFile> files) throws Exception {
+        log.info("REST request to create ticket with attachments (Multipart): filesCount={}", 
+                files != null ? files.size() : 0);
+        
+        TicketRequest request = objectMapper.readValue(ticketJson, TicketRequest.class);
+        
+        Set<ConstraintViolation<TicketRequest>> violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            throw new ConstraintViolationException(violations);
+        }
+        
+        TicketResponse response = ticketService.createTicket(request, files);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
@@ -129,14 +192,22 @@ public class TicketController {
             @Parameter(description = "Filter tickets by Assignee User UUID", example = "20000000-0000-0000-0000-000000000001")
             @RequestParam(name = "assignee", required = false) UUID assignedTo,
             
+
+            @Parameter(description = "Free-text search across ticket number, title, and description", example = "VPN")
+            @RequestParam(required = false) String search,
+            
             @Parameter(description = "Field name to sort the results by", example = "createdAt")
             @RequestParam(defaultValue = "createdAt") String sortBy,
             
             @Parameter(description = "Sorting direction ('asc' for ascending, 'desc' for descending)", example = "desc")
             @RequestParam(defaultValue = "desc") String sortDir) {
+
         log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, sortBy={}, sortDir={}",
                 page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
         PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
+        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, search={}, sortBy={}, sortDir={}",
+                page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);
+        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);
         return ResponseEntity.ok(response);
     }
 }
