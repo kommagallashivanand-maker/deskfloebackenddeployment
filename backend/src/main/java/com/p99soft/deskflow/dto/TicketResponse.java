@@ -9,6 +9,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 @Getter
@@ -68,4 +69,7 @@ public class TicketResponse {
 
     @Schema(description = "Timestamp when the ticket was closed", example = "2026-07-17T07:45:00")
     private LocalDateTime closedAt;
+
+    @Schema(description = "List of attachments uploaded for this ticket")
+    private List<AttachmentResponse> attachments;
 }
