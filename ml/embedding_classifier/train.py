@@ -126,7 +126,6 @@ def train_model(cfg=None):
         classes=classes,
         report_dir=report_dir,
         model_version=cfg.MODEL_VERSION,
-        X_train_len=len(X_train),
     )
 
     # ------------------------------------------------------------------

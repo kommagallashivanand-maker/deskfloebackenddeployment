@@ -17,7 +17,6 @@ def evaluate_model(
     classes: List[str],
     report_dir,
     model_version: str,
-    X_train_len: int,
 ) -> Dict[str, Any]:
     """
     Evaluate the trained classifier on the test set and persist all reports.
@@ -26,7 +25,6 @@ def evaluate_model(
         - classification_report.txt
         - metrics.json
         - confusion_matrix.csv
-        - training_summary.md
 
     Args:
         clf:                  Fitted sklearn classifier (operates on embeddings).
@@ -35,7 +33,6 @@ def evaluate_model(
         classes:              Sorted list of class names.
         report_dir:           Directory where reports will be written.
         model_version:        Version string used in report headers.
-        X_train_len:          Number of training samples (for summary stats).
 
     Returns:
         Dictionary with scalar metrics: accuracy, macro_f1, weighted_f1 and
@@ -99,25 +96,6 @@ def evaluate_model(
     cm_csv_file = report_path / "confusion_matrix.csv"
     cm_df.to_csv(cm_csv_file)
     logger.info(f"Saved confusion matrix to {cm_csv_file}")
-
-    # ------------------------------------------------------------------
-    # 4. Training summary markdown
-    # ------------------------------------------------------------------
-    total_samples = X_train_len + len(y_test)
-    summary_md_file = report_path / "training_summary.md"
-    summary_content = (
-        f"# Training Summary - {model_version}\n\n"
-        f"- **Dataset**: {total_samples} samples, {len(classes)} classes\n"
-        f"- **Train**: {X_train_len}\n"
-        f"- **Test**: {len(y_test)}\n"
-        f"- **Macro F1**: {macro_f1:.4f}\n"
-        f"- **Accuracy**: {accuracy:.2%}\n"
-        f"- **Model**: SentenceTransformer Embeddings + Logistic Regression\n"
-        f"- **Version**: {model_version}\n"
-    )
-    with open(summary_md_file, "w", encoding="utf-8") as f:
-        f.write(summary_content)
-    logger.info(f"Saved training summary to {summary_md_file}")
 
     logger.info(
         f"Evaluation completed — Accuracy: {accuracy:.4f}  Macro-F1: {macro_f1:.4f}"
