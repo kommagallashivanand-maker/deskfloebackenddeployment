@@ -9,5 +9,4 @@ public class DeskFlowApplication {
     public static void main(String[] args) {
         SpringApplication.run(DeskFlowApplication.class, args);
     }
-
 }
