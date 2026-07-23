@@ -1,0 +1,68 @@
+{
+    "model_version": "embedding_v1",
+    "accuracy": 0.7761194029850746,
+    "macro_f1": 0.7719828711138372,
+    "weighted_f1": 0.7725412974337588,
+    "metrics_by_class": {
+        "Account Access": {
+            "precision": 0.7872340425531915,
+            "recall": 0.925,
+            "f1-score": 0.8505747126436781,
+            "support": 40.0
+        },
+        "Billing": {
+            "precision": 0.625,
+            "recall": 0.625,
+            "f1-score": 0.625,
+            "support": 40.0
+        },
+        "Data Management": {
+            "precision": 0.723404255319149,
+            "recall": 0.85,
+            "f1-score": 0.7816091954022989,
+            "support": 40.0
+        },
+        "Feature Request": {
+            "precision": 0.9523809523809523,
+            "recall": 0.975609756097561,
+            "f1-score": 0.963855421686747,
+            "support": 41.0
+        },
+        "General Inquiry": {
+            "precision": 0.8378378378378378,
+            "recall": 0.775,
+            "f1-score": 0.8051948051948052,
+            "support": 40.0
+        },
+        "Notifications": {
+            "precision": 0.9047619047619048,
+            "recall": 0.95,
+            "f1-score": 0.926829268292683,
+            "support": 40.0
+        },
+        "Performance": {
+            "precision": 0.7608695652173914,
+            "recall": 0.8536585365853658,
+            "f1-score": 0.8045977011494253,
+            "support": 41.0
+        },
+        "Security": {
+            "precision": 0.8787878787878788,
+            "recall": 0.725,
+            "f1-score": 0.7945205479452054,
+            "support": 40.0
+        },
+        "Subscription": {
+            "precision": 0.55,
+            "recall": 0.55,
+            "f1-score": 0.55,
+            "support": 40.0
+        },
+        "Technical": {
+            "precision": 0.75,
+            "recall": 0.525,
+            "f1-score": 0.6176470588235294,
+            "support": 40.0
+        }
+    }
+}
