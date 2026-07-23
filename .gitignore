@@ -4,6 +4,9 @@
 *.iml
 *.ipr
 out/
+java/*.xml
+!java/pom.xml
+java/out/
 
 # Maven build directory
 target/
