@@ -1,20 +1,49 @@
-import random
+"""
+Category Embeddings Classifier (DF-023)
 
-# TODO: Replace this placeholder with the actual trained model (DF-023) once built.
-# This stub simulates predictions for embeddings-based category classification.
+Real inference using sentence embeddings + Logistic Regression.
+"""
 
-CATEGORIES = [
-    "Account Access",
-    "Billing",
-    "Technical",
-    "Feature Request",
-    "Subscription",
-    "Performance",
-    "Security",
-    "Notifications",
-    "Data Management",
-    "General Inquiry"
-]
+import os
+import sys
+from pathlib import Path
+import joblib
+import pandas as pd
+from sentence_transformers import SentenceTransformer
+
+# Resolve paths relative to this file
+_current_dir = Path(__file__).resolve().parent.parent.parent
+_model_path = _current_dir / "embedding_classifier" / "models" / "embedding_v1.pkl"
+_embedding_dir = _current_dir / "embedding_classifier"
+
+# Add embedding_classifier to path so pickle can find its utils module
+if str(_embedding_dir) not in sys.path:
+    sys.path.insert(0, str(_embedding_dir))
+
+# Load model artifact once at module level
+if not _model_path.exists():
+    raise FileNotFoundError(
+        f"Embedding classifier model not found at {_model_path}. "
+        f"Train the model first by running ml/embedding_classifier/train.py"
+    )
+
+try:
+    _model_artifact = joblib.load(_model_path)
+    _classifier = _model_artifact["classifier"]
+    _embedding_model_name = _model_artifact["embedding_model_name"]
+    _classes = _model_artifact.get("classes", None)
+except Exception as e:
+    raise RuntimeError(
+        f"Failed to load embedding classifier model from {_model_path}: {e}"
+    ) from e
+
+# Load SentenceTransformer encoder
+try:
+    _encoder = SentenceTransformer(_embedding_model_name)
+except Exception as e:
+    raise RuntimeError(
+        f"Failed to load SentenceTransformer model '{_embedding_model_name}': {e}"
+    ) from e
 
 def predict(
     subject: str,
@@ -23,7 +52,7 @@ def predict(
     requester_role: str = None
 ) -> tuple[str, float]:
     """
-    Predicts the category of a ticket using embeddings.
+    Predicts the category of a ticket using sentence embeddings.
     
     Args:
         subject: The ticket subject.
@@ -34,6 +63,18 @@ def predict(
     Returns:
         A tuple of (predicted_category, confidence)
     """
-    predicted_label = random.choice(CATEGORIES)
-    confidence = random.uniform(0.5, 1.0)
+    # Combine title and body as done in training
+    combined_text = f"{subject or ''}\n\n{description or ''}".strip()
+    
+    # Encode the text
+    embedding = _encoder.encode([combined_text], convert_to_numpy=True)
+    
+    # Get prediction
+    predicted_label = _classifier.predict(embedding)[0]
+    
+    # Get confidence (probability of the predicted class)
+    probas = _classifier.predict_proba(embedding)[0]
+    predicted_class_idx = list(_classifier.classes_).index(predicted_label)
+    confidence = float(probas[predicted_class_idx])
+    
     return predicted_label, confidence
