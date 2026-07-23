@@ -6,7 +6,7 @@ DeskFlow is an internal helpdesk and ticketing platform designed to streamline s
 
 ## Database Entity-Relationship Diagram (ERD)
 
-Below is the entity-relationship model representing the database schema. It consists of seven core tables: `teams`, `sla_policies`, `categories`, `users`, `tickets`, `ticket_attachments`, `ticket_activities`, and `ticket_comments`.
+Below is the entity-relationship model representing the database schema. It consists of eight core tables: `teams`, `categories`, `users`, `tickets`, `ticket_attachments`, `ticket_activities`, `ticket_comments`, and `sla_policies`.
 
 ```mermaid
 erDiagram
@@ -15,9 +15,11 @@ erDiagram
     USERS ||--o{ TICKETS : "creates (created_by)"
     USERS ||--o{ TICKETS : "handles (assigned_to)"
     TICKETS ||--o{ TICKET_ATTACHMENTS : "has attachments"
-    TICKETS ||--o{ TICKET_ACTIVITIES : "has audit history"
-    TICKETS ||--o{ TICKET_COMMENTS : "has comments"
-    USERS ||--o{ TICKET_COMMENTS : "authors"
+    TICKETS ||--o{ TICKET_ACTIVITIES : "logs history"
+    TICKETS ||--o{ TICKET_COMMENTS : "has conversation"
+    USERS ||--o{ TICKET_ACTIVITIES : "performs action (actor_id)"
+    USERS ||--o{ TICKET_COMMENTS : "posts (user_id)"
+    TICKET_COMMENTS ||--o{ TICKET_COMMENTS : "replies to (parent_comment_id)"
 
     TEAMS {
         uuid id PK
@@ -174,4 +176,3 @@ The project features fully integrated OpenAPI 3/Swagger documentation conforming
 
 * **Interactive Swagger UI**: [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html) — used to view, explore, and trigger REST API endpoints directly from your browser.
 * **Raw OpenAPI JSON Specs**: [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs) — raw OpenAPI 3.0 specification definition.
-
