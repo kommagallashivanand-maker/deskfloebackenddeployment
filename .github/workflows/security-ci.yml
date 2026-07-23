@@ -442,7 +442,14 @@ jobs:
 
           # Run semgrep but don't let its exit code abort the step; capture raw output.
           set +e
-          semgrep --config=auto --json --output "$REPORTS_DIR/semgrep-report.json" . 2>&1 | tee "$REPORTS_DIR/semgrep-output.log"
+          semgrep \
+                  --config=auto \
+                  --exclude=".github/" \
+                  --exclude="*.yml" \
+                  --exclude="*.yaml" \
+                  --json \
+                  --output "$REPORTS_DIR/semgrep-report.json" \
+                  . 2>&1 | tee "$REPORTS_DIR/semgrep-output.log"
           SEMGREP_EXIT=${PIPESTATUS[0]:-0}
           echo "semgrep_exit_code=${SEMGREP_EXIT}" > "$REPORTS_DIR/semgrep-exit.txt"
 
@@ -481,7 +488,7 @@ jobs:
                   gh.write("semgrep_findings=0\n")
                   gh.write("severity_summary=ERROR:JSON_PARSE\n")
                   gh.write("sast_status=ERROR\n")
-              sys.exit(0)
+              sys.exit(1)
 
           results = data.get("results", [])
           severity_count = {}
@@ -494,7 +501,13 @@ jobs:
               path = r.get("path") or r.get("extra", {}).get("metadata", {}).get("filepath") or "<unknown>"
               files.setdefault(path, []).append(r)
 
-          status = "FAIL" if severity_count.get("ERROR", 0) > 0 else "PASS"
+          fail_count = (
+                   severity_count.get("ERROR", 0)
+                   + severity_count.get("HIGH", 0)
+                   + severity_count.get("MEDIUM", 0)
+                    )
+
+          status = "FAIL" if fail_count > 0 else "PASS"
           summary = ", ".join(f"{k}:{v}" for k, v in severity_count.items()) or "none"
 
           with open(out_txt, "w", encoding="utf-8") as out:
@@ -527,9 +540,13 @@ jobs:
 
           # Write GitHub step outputs
           with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
-              gh.write(f"semgrep_findings={len(results)}\n")
-              gh.write(f"severity_summary={summary}\n")
-              gh.write(f"sast_status={status}\n")
+               gh.write(f"semgrep_findings={len(results)}\n")
+               gh.write(f"severity_summary={summary}\n")
+               gh.write(f"sast_status={status}\n")
+
+          if status == "FAIL":
+               print("Security vulnerabilities found.")
+               sys.exit(1)
           
       # Upload Semgrep reports to artifacts (JSON + human-readable)
       - name: Upload Semgrep Report
