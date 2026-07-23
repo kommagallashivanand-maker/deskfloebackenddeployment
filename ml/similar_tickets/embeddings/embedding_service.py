@@ -9,12 +9,12 @@ import logging
 from typing import List
 
 from sentence_transformers import SentenceTransformer
-from embeddings.config import (
+from .config import (
     MODEL_NAME,
     DEVICE,
 )
-from embeddings.models.embedding_result import EmbeddingResult
-from embeddings.models.ticket import Ticket
+from .models.embedding_result import EmbeddingResult
+from .models.ticket import Ticket
 
 logger = logging.getLogger(__name__)
 

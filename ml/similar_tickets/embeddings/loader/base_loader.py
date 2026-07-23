@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List
-from embeddings.models.ticket import Ticket
+from ..models.ticket import Ticket
 
 class BaseLoader(ABC):
     """Abstract base class for ticket loaders."""

@@ -10,9 +10,9 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any
 
-from embeddings.config import OUTPUT_EMBEDDINGS_FILE, OUTPUT_METADATA_FILE
-from embeddings.exceptions import OutputWriteError
-from embeddings.models.embedding_result import EmbeddingResult
+from .config import OUTPUT_EMBEDDINGS_FILE, OUTPUT_METADATA_FILE
+from .exceptions import OutputWriteError
+from .models.embedding_result import EmbeddingResult
 
 logger = logging.getLogger(__name__)
 
