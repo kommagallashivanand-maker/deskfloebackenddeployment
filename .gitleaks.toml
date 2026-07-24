@@ -20,7 +20,7 @@ useDefault = true
 [[rules]]
 id = "env-file-extension"
 description = "Detects .env files that may contain secrets"
-regex = '''(?i)(password|secret|key|token|api_key)\s*=\s*\S+'''
+regex = '''(?i)(jwt[_\-]?secret|jwt[_\-]?key)\s*[=:]\s*[\"\']?\S{8,}[\"\']?'''
 path = '''\.env.*'''
 tags = ["env", "secrets"]
 
