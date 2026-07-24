@@ -37,12 +37,6 @@ management:
     health:
       show-details: always
 
-application:
-  security:
-    jwt:
-      secret-key: ${JWT_SECRET_KEY}
-      expiration: ${JWT_EXPIRATION}
-
 aws:
   s3:
     bucket: ${AWS_S3_BUCKET:deskflow-attachments}

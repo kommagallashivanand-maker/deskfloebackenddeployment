@@ -5,8 +5,6 @@ import com.p99soft.deskflow.enums.Status;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import lombok.*;
-
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
@@ -28,7 +26,6 @@ public class TicketRequest {
     @Schema(description = "Detailed explanation of the issue", example = "Unable to connect to the corporate VPN from home using Cisco AnyConnect.")
     private String description;
 
-    @NotNull(message = "Priority is required")
     @Schema(description = "Priority level of the ticket", example = "HIGH")
     private Priority priority;
 
