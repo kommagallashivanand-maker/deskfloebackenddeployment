@@ -31,21 +31,23 @@ def check_thresholds(aggregate_metrics: dict) -> bool:
     Validates metrics against CI quality thresholds.
     
     Thresholds are set at ~15% below the baseline real-model performance observed
-    on 2026-07-24 (git commit a698b74) to allow for normal variance while catching
-    genuine regressions.
+    on 2026-07-24 to allow for normal variance while catching genuine regressions.
     
-    Baseline numbers from real eval run with corrected feature extraction:
+    Priority baselines require en_core_web_sm (spaCy) — same as production DF-026.
+    Install via ml/eval_harness/requirements.txt and CI workflow spacy download step.
+    
+    Baseline numbers from real eval run (golden set, spaCy + YAKE keywords, VADER):
     - category_baseline:    macro-F1 = 0.9209 (2026-07-23, unchanged)
     - category_embeddings:  macro-F1 = 0.8163 (2026-07-23, unchanged)
-    - priority_model:       macro-Precision = 0.4846, macro-Recall = 0.6428 (2026-07-24, corrected)
+    - priority_model v1.1.0: macro-Precision = 0.5372, macro-Recall = 0.6955 (2026-07-24)
     
-    Note: priority_model baseline was corrected after fixing priority_model.py to use
-    the REAL DF-026 feature extraction pipeline instead of simplified inline extraction.
+    Historical v1.0.0 priority baseline (0.4846 / 0.6428) was also measured locally
+    with spaCy; CI did not install the model until the spaCy parity fix.
     
     CI Thresholds (15% below baseline):
     - category_baseline:    macro-F1 >= 0.78
     - category_embeddings:  macro-F1 >= 0.69
-    - priority_model:       macro-Precision >= 0.41, macro-Recall >= 0.55
+    - priority_model:       macro-Precision >= 0.46, macro-Recall >= 0.59
     
     Args:
         aggregate_metrics: The calculated aggregate metrics dict.
@@ -80,8 +82,8 @@ def check_thresholds(aggregate_metrics: dict) -> bool:
     # Define thresholds (15% below baseline)
     THRESHOLD_BASELINE_F1 = 0.78
     THRESHOLD_EMBEDDINGS_F1 = 0.69
-    THRESHOLD_PRIORITY_PRECISION = 0.41  # 15% below 0.4846 (corrected after DF-026 integration)
-    THRESHOLD_PRIORITY_RECALL = 0.55     # 15% below 0.6428 (corrected after DF-026 integration)
+    THRESHOLD_PRIORITY_PRECISION = 0.46  # 15% below 0.5372 (v1.1.0, spaCy-consistent baseline)
+    THRESHOLD_PRIORITY_RECALL = 0.59     # 15% below 0.6955 (v1.1.0, spaCy-consistent baseline)
     
     # Check thresholds
     passed = True
