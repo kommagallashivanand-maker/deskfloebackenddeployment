@@ -26,6 +26,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import com.p99soft.deskflow.security.UserDetailsImpl;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -54,9 +56,6 @@ public class TicketController {
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
     private final Validator validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
 
-    /**
-     * Only EMPLOYEE can create tickets.
-     */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasRole('EMPLOYEE')")
     @Operation(
@@ -100,8 +99,7 @@ public class TicketController {
     public ResponseEntity<TicketResponse> createTicketMultipart(
             @RequestPart("ticket") String ticketJson,
             @RequestPart(value = "files", required = false) List<MultipartFile> files) throws Exception {
-        log.info("REST request to create ticket with attachments (Multipart): filesCount={}",
-                files != null ? files.size() : 0);
+        log.info("REST request to create ticket (Multipart): filesCount={}", files != null ? files.size() : 0);
 
         TicketRequest request = objectMapper.readValue(ticketJson, TicketRequest.class);
         Set<ConstraintViolation<TicketRequest>> violations = validator.validate(request);

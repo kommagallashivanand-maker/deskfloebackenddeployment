@@ -6,6 +6,7 @@ import com.p99soft.deskflow.dto.TicketResponse;
 import com.p99soft.deskflow.entity.Category;
 import com.p99soft.deskflow.entity.Ticket;
 import com.p99soft.deskflow.entity.User;
+import com.p99soft.deskflow.enums.CategoryType;
 import com.p99soft.deskflow.enums.Priority;
 import com.p99soft.deskflow.enums.Status;
 import com.p99soft.deskflow.exception.ResourceNotFoundException;
@@ -73,15 +74,16 @@ public class TicketServiceImpl implements TicketService {
     }
 
     private TicketResponse createTicketInternal(TicketRequest request, List<MultipartFile> files) {
-        log.info("Creating ticket: title={}, creatorId={}, fileCount={}", 
+        log.info("Creating ticket: title={}, creatorId={}, fileCount={}",
                 request.getTitle(), request.getCreatedBy(), files != null ? files.size() : 0);
+
         User creator = userRepository.findById(request.getCreatedBy())
                 .orElseThrow(() -> new ResourceNotFoundException(
                         "Creator User not found with id: " + request.getCreatedBy()));
 
         Category category = categoryRepository.findById(request.getCategoryId())
-                .orElseThrow(
-                        () -> new ResourceNotFoundException("Category not found with id: " + request.getCategoryId()));
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Category not found with id: " + request.getCategoryId()));
 
         User assignee = null;
         if (request.getAssignedTo() != null) {

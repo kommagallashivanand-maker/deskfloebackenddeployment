@@ -385,11 +385,11 @@ jwt:
   expiration: ${JWT_EXPIRATION_MS}
 
 cors:
-  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:<comma-separated-origins>}
   allowed-methods: GET,POST,PUT,DELETE,PATCH,OPTIONS
   allowed-headers: "*"
   allow-credentials: true
-  max-age: 3600
+  max-age: <max-age-in-seconds>
 ```
 
 ### Environment Variables
@@ -413,108 +413,331 @@ openssl rand -hex 32
 
 ## API Endpoints
 
-### Public
+### Authentication Endpoints
 
-#### Login
+---
+
+#### POST `/api/v1/auth/login`
+**Auth required:** No — public  
+**Roles:** All
+
+**Request:**
 ```http
 POST /api/v1/auth/login
 Content-Type: application/json
-
+```
+```json
 {
   "email": "<user@example.com>",
   "password": "<password>"
 }
 ```
-**Response `200 OK`:** `LoginResponse` with JWT token
+
+**Response `200 OK`:**
+```json
+{
+  "token": "<jwt-token>",
+  "tokenType": "Bearer",
+  "userId": "<uuid>",
+  "email": "<user@example.com>",
+  "fullName": "<First Last>",
+  "role": "<EMPLOYEE|AGENT|ADMIN>"
+}
+```
+
+**Error responses:**
+- `400` — missing or invalid email/password fields
+- `401` — wrong credentials
 
 ---
 
-### ADMIN Only
+#### POST `/api/v1/auth/register`
+**Auth required:** Yes — ADMIN JWT  
+**Roles:** ADMIN only
 
-#### Register User
+**Request:**
 ```http
 POST /api/v1/auth/register
 Authorization: Bearer <admin-jwt-token>
 Content-Type: application/json
-
+```
+```json
 {
+  "employeeCode": "<employee-code>",
   "firstName": "<first-name>",
   "lastName": "<last-name>",
   "email": "<user@example.com>",
   "password": "<password>",
-  "role": "<EMPLOYEE|AGENT|ADMIN>"
+  "role": "<EMPLOYEE|AGENT|ADMIN>",
+  "teamId": "<team-uuid>"
 }
 ```
-**Response `201 Created`:** `AuthResponse`
-**`401`** — no/invalid token | **`403`** — not ADMIN
+> `employeeCode` and `teamId` are optional. All other fields are required.
+
+**Response `201 Created`:**
+```json
+{
+  "userId": "<uuid>",
+  "email": "<user@example.com>",
+  "fullName": "<First Last>",
+  "role": "<EMPLOYEE|AGENT|ADMIN>",
+  "message": "User registered successfully"
+}
+```
+
+**Error responses:**
+- `400` — validation failed or email already registered
+- `401` — missing or invalid JWT
+- `403` — authenticated user is not ADMIN
+- `404` — teamId provided but team not found
 
 ---
 
-### EMPLOYEE Only
+### Ticket Endpoints
 
-#### Create Ticket
+---
+
+#### POST `/api/v1/tickets`
+**Auth required:** Yes  
+**Roles:** EMPLOYEE only  
+**Content-Type:** `application/json`
+
+**Request:**
 ```http
 POST /api/v1/tickets
 Authorization: Bearer <employee-jwt-token>
 Content-Type: application/json
-
+```
+```json
 {
   "title": "<ticket-title>",
   "description": "<ticket-description>",
   "priority": "<LOW|MEDIUM|HIGH|URGENT>",
   "categoryId": "<category-uuid>",
-  "createdBy": "<user-uuid>"
+  "createdBy": "<employee-user-uuid>",
+  "assignedTo": "<agent-user-uuid>"
 }
 ```
+> `priority`, `status`, and `assignedTo` are optional. `title`, `categoryId`, and `createdBy` are required.
+
 **Response `201 Created`:** `TicketResponse`
-**`403`** — AGENT and ADMIN cannot create tickets
+
+**Error responses:**
+- `400` — validation failed
+- `401` — missing or invalid JWT
+- `403` — AGENT and ADMIN cannot create tickets
 
 ---
 
-### AGENT and ADMIN
+#### POST `/api/v1/tickets` (Multipart with attachments)
+**Auth required:** Yes  
+**Roles:** EMPLOYEE only  
+**Content-Type:** `multipart/form-data`
 
-#### Update Ticket
+**Request:**
 ```http
-PUT /api/v1/tickets/{id}
+POST /api/v1/tickets
+Authorization: Bearer <employee-jwt-token>
+Content-Type: multipart/form-data
+
+Part "ticket" (application/json):
+{
+  "title": "<ticket-title>",
+  "description": "<ticket-description>",
+  "priority": "<LOW|MEDIUM|HIGH|URGENT>",
+  "categoryId": "<category-uuid>",
+  "createdBy": "<employee-user-uuid>"
+}
+
+Part "files": <file1>, <file2>, ...
+```
+
+**Response `201 Created`:** `TicketResponse` with presigned attachment URLs
+
+**Error responses:**
+- `400` — validation failed
+- `401` — missing or invalid JWT
+- `403` — AGENT and ADMIN cannot create tickets
+
+---
+
+#### GET `/api/v1/tickets`
+**Auth required:** Yes  
+**Roles:** EMPLOYEE, AGENT, ADMIN
+
+**Request:**
+```http
+GET /api/v1/tickets?page=<page>&size=<size>&status=<status>&priority=<priority>&category=<category-uuid>&assignee=<user-uuid>&search=<keyword>&sortBy=<field>&sortDir=<asc|desc>
+Authorization: Bearer <jwt-token>
+```
+
+**Query Parameters:**
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `page` | No | `0` | Zero-indexed page number |
+| `size` | No | `10` | Records per page |
+| `status` | No | — | Filter: `OPEN`, `TRIAGED`, `IN_PROGRESS`, `ON_HOLD`, `RESOLVED`, `CLOSED` |
+| `priority` | No | — | Filter: `LOW`, `MEDIUM`, `HIGH`, `URGENT` |
+| `category` | No | — | Filter by category UUID |
+| `assignee` | No | — | Filter by assignee user UUID |
+| `search` | No | — | Free-text search on title, description, ticket number |
+| `sortBy` | No | `createdAt` | Field to sort by |
+| `sortDir` | No | `desc` | Sort direction: `asc` or `desc` |
+
+**Response `200 OK`:** Paginated list
+```json
+{
+  "content": [ "<TicketResponse>", "..." ],
+  "pageNumber": "<page-number>",
+  "pageSize": "<page-size>",
+  "totalElements": "<total-count>",
+  "totalPages": "<total-pages>",
+  "last": "<true|false>"
+}
+```
+
+**Error responses:**
+- `401` — missing or invalid JWT
+
+---
+
+#### GET `/api/v1/tickets/{id}`
+**Auth required:** Yes  
+**Roles:** EMPLOYEE, AGENT, ADMIN
+
+**Request:**
+```http
+GET /api/v1/tickets/<ticket-uuid>
+Authorization: Bearer <jwt-token>
+```
+
+**Response `200 OK`:** `TicketResponse`
+
+**Error responses:**
+- `401` — missing or invalid JWT
+- `404` — ticket not found
+
+---
+
+#### PUT `/api/v1/tickets/{id}`
+**Auth required:** Yes  
+**Roles:** AGENT, ADMIN only
+
+**Request:**
+```http
+PUT /api/v1/tickets/<ticket-uuid>
 Authorization: Bearer <agent-or-admin-jwt-token>
 Content-Type: application/json
 ```
+```json
+{
+  "title": "<updated-title>",
+  "description": "<updated-description>",
+  "priority": "<LOW|MEDIUM|HIGH|URGENT>",
+  "status": "<OPEN|TRIAGED|IN_PROGRESS|ON_HOLD|RESOLVED|CLOSED>",
+  "categoryId": "<category-uuid>",
+  "assignedTo": "<agent-user-uuid>"
+}
+```
+> All fields are optional — only supplied non-null fields are updated.
+
+**Valid status transitions:**
+
+| From | Allowed transitions |
+|---|---|
+| `OPEN` | `TRIAGED`, `IN_PROGRESS`, `CLOSED` |
+| `TRIAGED` | `IN_PROGRESS`, `ON_HOLD`, `CLOSED` |
+| `IN_PROGRESS` | `ON_HOLD`, `RESOLVED`, `CLOSED` |
+| `ON_HOLD` | `IN_PROGRESS`, `CLOSED` |
+| `RESOLVED` | `CLOSED`, `OPEN`, `IN_PROGRESS` |
+| `CLOSED` | `OPEN`, `IN_PROGRESS` |
+
 **Response `200 OK`:** `TicketResponse`
-**`403`** — EMPLOYEE cannot update tickets
+
+**Error responses:**
+- `400` — invalid status transition
+- `401` — missing or invalid JWT
+- `403` — EMPLOYEE cannot update tickets
+- `404` — ticket, category, or assignee not found
 
 ---
 
-### All Authenticated Users
+### Comment & Activity Endpoints
 
-#### List Tickets
+---
+
+#### POST `/api/v1/tickets/{ticketId}/comments`
+**Auth required:** Yes  
+**Roles:** EMPLOYEE, AGENT, ADMIN
+
+**Request:**
 ```http
-GET /api/v1/tickets
+POST /api/v1/tickets/<ticket-uuid>/comments
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+```
+```json
+{
+  "userId": "<commenter-user-uuid>",
+  "content": "<comment-text>",
+  "parentCommentId": "<parent-comment-uuid>"
+}
+```
+> `parentCommentId` is optional — omit for a top-level comment, include for a threaded reply.  
+> Supports `@username` or `@email` mentions in `content`.
+
+**Response `201 Created`:** `CommentResponse`
+
+**Error responses:**
+- `400` — validation failed
+- `401` — missing or invalid JWT
+- `404` — ticket or user not found
+
+---
+
+#### GET `/api/v1/tickets/{ticketId}/comments`
+**Auth required:** Yes  
+**Roles:** EMPLOYEE, AGENT, ADMIN
+
+**Request:**
+```http
+GET /api/v1/tickets/<ticket-uuid>/comments
 Authorization: Bearer <jwt-token>
 ```
 
-#### Get Ticket
+**Response `200 OK`:** List of `CommentResponse` (threaded — top-level comments with nested replies)
+
+**Error responses:**
+- `401` — missing or invalid JWT
+- `404` — ticket not found
+
+---
+
+#### GET `/api/v1/tickets/{ticketId}/activities`
+**Auth required:** Yes  
+**Roles:** EMPLOYEE, AGENT, ADMIN
+
+**Request:**
 ```http
-GET /api/v1/tickets/{id}
+GET /api/v1/tickets/<ticket-uuid>/activities
 Authorization: Bearer <jwt-token>
 ```
 
-#### Add Comment
-```http
-POST /api/v1/tickets/{id}/comments
-Authorization: Bearer <jwt-token>
-```
+**Response `200 OK`:** List of `ActivityResponse` (chronological audit log of all state transitions)
 
-#### Get Comments
-```http
-GET /api/v1/tickets/{id}/comments
-Authorization: Bearer <jwt-token>
-```
+**Error responses:**
+- `401` — missing or invalid JWT
 
-#### Get Activity Timeline
-```http
-GET /api/v1/tickets/{id}/activities
-Authorization: Bearer <jwt-token>
-```
+---
+
+### Public / System Endpoints
+
+| Endpoint | Auth | Description |
+|---|---|---|
+| `GET /swagger-ui/index.html` | No | Interactive API documentation |
+| `GET /v3/api-docs` | No | OpenAPI spec (JSON) |
+| `GET /actuator/health` | No | Application health status |
 
 ---
 
@@ -599,7 +822,7 @@ public class CorsProperties {
 **Production setup:**
 
 ```bash
-CORS_ALLOWED_ORIGINS=https://your-frontend-domain.com
+CORS_ALLOWED_ORIGINS=<your-frontend-domain>
 ```
 
 CORS is registered in `SecurityConfig` via `CorsConfigurationSource` bean and applied with `.cors(cors -> cors.configurationSource(...))`.
@@ -668,7 +891,7 @@ UPDATE users SET password = '<bcrypt-hash>' WHERE email = '<user@example.com>';
 
 ### Flyway Failed Migration
 ```sql
-DELETE FROM flyway_schema_history WHERE version = '4' AND success = false;
+DELETE FROM flyway_schema_history WHERE version = '<version-number>' AND success = false;
 ```
 
 ---
@@ -716,16 +939,4 @@ DELETE FROM flyway_schema_history WHERE version = '4' AND success = false;
 
 ---
 
-## Future Enhancements
 
-- [ ] Refresh tokens — avoid repeated logins on expiry
-- [ ] Token revocation / blacklist
-- [ ] Rate limiting on `/login` — prevent brute force
-- [ ] Account lockout after N failed attempts
-- [ ] Password reset via email
-- [ ] MFA — TOTP or SMS OTP
-- [ ] OAuth2 — Google/Microsoft SSO
-
----
-
-**Questions?** Contact the backend team or open an issue on the project repository.
