@@ -48,8 +48,6 @@ public class TicketServiceTest {
     private CategoryRepository categoryRepository;
     @Mock
     private SlaPolicyRepository slaPolicyRepository;
-
-    @InjectMocks
     @Mock
     private StorageService storageService;
 
@@ -257,8 +255,9 @@ public class TicketServiceTest {
         Page<Ticket> page = new PageImpl<>(Collections.singletonList(ticket));
         when(ticketRepository.findAll(any(Specification.class), any(Pageable.class))).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
-        PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "desc");
+
         PageResponse<TicketResponse> responses = ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "createdAt", "desc");
+
         assertNotNull(responses);
         assertEquals(1, responses.getContent().size());
         assertEquals(0, responses.getPageNumber());
@@ -273,7 +272,6 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "asc");
         ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "createdAt", "asc");
 
         Pageable capturedPageable = pageableCaptor.getValue();
@@ -288,7 +286,6 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "createdAt", "desc");
         ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "createdAt", "desc");
 
         Pageable capturedPageable = pageableCaptor.getValue();
@@ -303,7 +300,6 @@ public class TicketServiceTest {
         when(ticketRepository.findAll(any(Specification.class), pageableCaptor.capture())).thenReturn(page);
         when(slaPolicyRepository.findByPriority(Priority.HIGH)).thenReturn(Optional.of(slaPolicy));
 
-        ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, "resolvedAt", "desc");
         ticketService.listTickets(0, 10, Status.OPEN, Priority.HIGH, categoryId, assigneeId, null, "resolvedAt", "desc");
 
         Pageable capturedPageable = pageableCaptor.getValue();
