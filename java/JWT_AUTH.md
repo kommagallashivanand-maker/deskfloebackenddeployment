@@ -27,7 +27,7 @@ The DeskFlow backend implements **stateless JWT-based authentication** using Spr
 - ✅ BCrypt password hashing
 - ✅ Stateless sessions (no HTTP session storage)
 - ✅ JWT tokens with role-based claims
-- ✅ Token expiration (24 hours default)
+- ✅ Token expiration (configurable via `JWT_EXPIRATION_MS`)
 - ✅ Secure HMAC-SHA256 signing
 - ✅ Centralized exception handling
 - ✅ Clean separation of concerns (SOLID principles)
@@ -36,11 +36,11 @@ The DeskFlow backend implements **stateless JWT-based authentication** using Spr
 
 | Component | Technology |
 |---|---|
-| Framework | Spring Boot 4.1.0 |
-| Security | Spring Security 7.1.0 |
-| JWT Library | JJWT 0.12.6 |
+| Framework | Spring Boot |
+| Security | Spring Security |
+| JWT Library | JJWT |
 | Password Encoding | BCrypt |
-| Database | PostgreSQL 18.3 |
+| Database | PostgreSQL |
 
 ---
 
@@ -155,8 +155,8 @@ jwt:
 **Environment Variables (Production):**
 
 ```bash
-JWT_SECRET=your-256-bit-hex-secret
-JWT_EXPIRATION_MS=86400000
+JWT_SECRET=<your-256-bit-hex-secret>
+JWT_EXPIRATION_MS=<token-validity-in-milliseconds>
 ```
 
 ---
@@ -387,7 +387,7 @@ jwt:
 | Variable | Description | Example |
 |---|---|---|
 | `JWT_SECRET` | 256-bit hex-encoded HMAC key | `<64-char-hex-string>` |
-| `JWT_EXPIRATION_MS` | Token validity in milliseconds | `86400000` (24h) |
+| `JWT_EXPIRATION_MS` | Token validity in milliseconds | `<expiration-in-ms>` |
 | `DB_URL` | JDBC connection string | `jdbc:postgresql://<host>:<port>/<database>` |
 | `DB_USERNAME` | Database username | `<your-db-username>` |
 | `DB_PASSWORD` | Database password | `<your-db-password>` |
@@ -656,7 +656,7 @@ Response: 200 OK
 **Debug:**
 ```bash
 # Check token expiration
-curl -H "Authorization: Bearer <token>" http://localhost:8080/actuator/health
+curl -H "Authorization: Bearer <your-jwt-token>" http://localhost:<port>/actuator/health
 ```
 
 ---
@@ -683,7 +683,7 @@ Add CORS configuration to `SecurityConfig`:
 @Bean
 public CorsConfigurationSource corsConfigurationSource() {
     CorsConfiguration config = new CorsConfiguration();
-    config.setAllowedOrigins(List.of("http://localhost:3000"));
+    config.setAllowedOrigins(List.of("<your-frontend-origin>"));
     config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
     config.setAllowedHeaders(List.of("*"));
     config.setAllowCredentials(true);
@@ -726,7 +726,7 @@ Then restart the application.
 
 ### Development
 
-- ✅ **Test with expired tokens** — set `jwt.expiration=60000` (1 minute) for testing
+- ✅ **Test with expired tokens** — set `jwt.expiration=<short-ms>` for testing
 - ✅ **Use jwt.io** to decode tokens during debugging
 - ✅ **Check logs** — `JwtAuthenticationFilter` logs warnings on invalid tokens
 - ✅ **Handle exceptions** — `GlobalExceptionHandler` centralizes all error responses
@@ -802,10 +802,10 @@ Then restart the application.
 
 | Date | Change |
 |---|---|
-| 2026-07-24 | Initial JWT implementation |
-| 2026-07-24 | Added role-based claims to JWT |
-| 2026-07-24 | Configured stateless session management |
-| 2026-07-24 | Created comprehensive documentation |
+| `<date>` | Initial JWT implementation |
+| `<date>` | Added role-based claims to JWT |
+| `<date>` | Configured stateless session management |
+| `<date>` | Created comprehensive documentation |
 
 ---
 
