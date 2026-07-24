@@ -836,6 +836,7 @@ jobs:
             update_env_var "IMAGE_TAG" "v${{ github.run_number }}"
             
             # Set database and security credentials from GitHub Secrets
+            update_env_var "DB_URL" "${{ secrets.DB_URL }}"
             update_env_var "DB_USERNAME" "${{ secrets.DB_USERNAME }}"
             update_env_var "DB_PASSWORD" "${{ secrets.DB_PASSWORD }}"
             update_env_var "JWT_SECRET" "${{ secrets.JWT_SECRET }}"
