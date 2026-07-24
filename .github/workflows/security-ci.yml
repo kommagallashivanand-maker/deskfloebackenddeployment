@@ -599,6 +599,7 @@ jobs:
           git fetch origin "$BASE" 2>/dev/null || true
           set +e
           gitleaks detect --source . \
+            --config .gitleaks.toml \
             --log-opts "${BASE}..${HEAD}" \
             --report-format json \
             --report-path "$REPORTS_DIR/gitleaks-report.json" \
