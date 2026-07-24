@@ -39,7 +39,7 @@ tags = ["database", "credentials"]
 [[rules]]
 id = "jwt-secret-assignment"
 description = "Detects JWT secret assignments in code"
-regex = '''(?i)(jwt[_\-]?secret|jwt[_\-]?key)\s*[=:]\s*[\"\']?\S{8,}[\"\']?'''
+regex = '''(?i)(jwt[_\-]?secret|jwt[_\-]?key)\s*[=:]\s*["']?(?!\$\{)[^"'\s]{8,}["']?'''
 tags = ["jwt", "secrets"]
 
 [[rules]]
