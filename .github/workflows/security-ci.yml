@@ -46,28 +46,38 @@ jobs:
           echo "head_sha=${HEAD}" >> "$GITHUB_OUTPUT"
           echo "commit_range=${BASE}..${HEAD}" >> "$GITHUB_OUTPUT"
 
-      # Detect project type by looking for config files
       - name: Detect project type
         id: detect
         run: |
-          TYPE="unknown"
-          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ] || [ -f "setup.py" ]; then
-            if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null; then
+          HAS_PYTHON=false
+          HAS_JAVA=false
+
+          # Check for Python config files
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ] || [ -f "setup.py" ] || \
+             [ -n "$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) 2>/dev/null)" ]; then
+            HAS_PYTHON=true
+          fi
+
+          # Check for Java config files
+          if [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ] || \
+             [ -n "$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null)" ]; then
+            HAS_JAVA=true
+          fi
+
+          if [ "$HAS_PYTHON" = "true" ] && [ "$HAS_JAVA" = "true" ]; then
+            TYPE="both"
+          elif [ "$HAS_JAVA" = "true" ]; then
+            TYPE="java"
+          elif [ "$HAS_PYTHON" = "true" ]; then
+            # Distinguish fastapi vs python-ml if needed
+            if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null || \
+               find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) -exec grep -qiE "fastapi" {} \; 2>/dev/null; then
               TYPE="fastapi"
             else
               TYPE="python-ml"
             fi
-          fi
-          if [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
-            TYPE="java"
-          fi
-          if [ "$TYPE" = "unknown" ]; then
-            PYFILE=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) | head -1)
-            if [ -n "$PYFILE" ]; then
-              if grep -qiE "fastapi" "$PYFILE" 2>/dev/null; then TYPE="fastapi"; else TYPE="python-ml"; fi
-            fi
-            JFILE=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) | head -1)
-            if [ -n "$JFILE" ]; then TYPE="java"; fi
+          else
+            TYPE="unknown"
           fi
           echo "project_type=${TYPE}" >> "$GITHUB_OUTPUT"
           echo "Detected: ${TYPE}"
@@ -82,7 +92,7 @@ jobs:
   test-python:
     name: Tests and Coverage (Python)
     needs: detect
-    if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+    if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
     runs-on: ubuntu-latest
     outputs:
       tests_ran: ${{ steps.run-tests.outputs.tests_ran }}
@@ -195,7 +205,7 @@ jobs:
   test-java:
     name: Tests and Coverage (Java)
     needs: detect
-    if: needs.detect.outputs.project_type == 'java'
+    if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
     runs-on: ubuntu-latest
     outputs:
       tests_ran: ${{ steps.results.outputs.tests_ran }}
@@ -328,7 +338,7 @@ jobs:
 
       # Set up Python for pip-audit (Python projects)
       - name: Set up Python
-        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -336,7 +346,7 @@ jobs:
       # Scan Python dependencies with pip-audit
       - name: Run pip-audit
         id: pip-audit
-        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
         env:
           REPORTS_DIR: security-reports
         run: |
@@ -351,7 +361,7 @@ jobs:
 
       # Install Trivy for Java dependency scanning
       - name: Install Trivy
-        if: needs.detect.outputs.project_type == 'java'
+        if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
         run: |
           sudo apt-get install -y wget apt-transport-https gnupg
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
@@ -363,7 +373,7 @@ jobs:
       # Scan Java dependencies with Trivy
       - name: Run Trivy scan
         id: trivy
-        if: needs.detect.outputs.project_type == 'java'
+        if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
         env:
           REPORTS_DIR: security-reports
         run: |
@@ -378,16 +388,47 @@ jobs:
       - name: Consolidate audit outputs
         id: audit
         run: |
-          if [ -n "${{ steps.pip-audit.outputs.tool }}" ]; then
-            echo "tool=${{ steps.pip-audit.outputs.tool }}" >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
-            echo "critical_high=${{ steps.pip-audit.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+          PIP_TOOL="${{ steps.pip-audit.outputs.tool }}"
+          TRIVY_TOOL="${{ steps.trivy.outputs.tool }}"
+          
+          PIP_VULNS="${{ steps.pip-audit.outputs.total_vulns }}"
+          PIP_CRITICAL="${{ steps.pip-audit.outputs.critical_high }}"
+          PIP_STATUS="${{ steps.pip-audit.outputs.audit_status }}"
+          
+          TRIVY_VULNS="${{ steps.trivy.outputs.total_vulns }}"
+          TRIVY_CRITICAL="${{ steps.trivy.outputs.critical_high }}"
+          TRIVY_STATUS="${{ steps.trivy.outputs.audit_status }}"
+          
+          PIP_VULNS=${PIP_VULNS:-0}
+          PIP_CRITICAL=${PIP_CRITICAL:-0}
+          PIP_STATUS=${PIP_STATUS:-PASS}
+          
+          TRIVY_VULNS=${TRIVY_VULNS:-0}
+          TRIVY_CRITICAL=${TRIVY_CRITICAL:-0}
+          TRIVY_STATUS=${TRIVY_STATUS:-PASS}
+          
+          if [ -n "$PIP_TOOL" ] && [ -n "$TRIVY_TOOL" ]; then
+            TOTAL_VULNS=$(( PIP_VULNS + TRIVY_VULNS ))
+            CRITICAL_HIGH=$(( PIP_CRITICAL + TRIVY_CRITICAL ))
+            if [ "$PIP_STATUS" = "FAIL" ] || [ "$TRIVY_STATUS" = "FAIL" ]; then
+              STATUS="FAIL"
+            else
+              STATUS="PASS"
+            fi
+            echo "tool=pip-audit & Trivy" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$TOTAL_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$CRITICAL_HIGH" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$STATUS" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PIP_TOOL" ]; then
+            echo "tool=$PIP_TOOL" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$PIP_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$PIP_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$PIP_STATUS" >> "$GITHUB_OUTPUT"
           else
-            echo "tool=${{ steps.trivy.outputs.tool }}" >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.trivy.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
-            echo "critical_high=${{ steps.trivy.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.trivy.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+            echo "tool=$TRIVY_TOOL" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$TRIVY_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$TRIVY_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$TRIVY_STATUS" >> "$GITHUB_OUTPUT"
           fi
 
       # Fail the workflow if critical/high vulnerabilities found
@@ -793,6 +834,11 @@ jobs:
             # Set target username and image tags for docker compose
             update_env_var "DOCKERHUB_USERNAME" "${{ secrets.DOCKERHUB_USERNAME }}"
             update_env_var "IMAGE_TAG" "v${{ github.run_number }}"
+            
+            # Set database and security credentials from GitHub Secrets
+            update_env_var "DB_USERNAME" "${{ secrets.DB_USERNAME }}"
+            update_env_var "DB_PASSWORD" "${{ secrets.DB_PASSWORD }}"
+            update_env_var "JWT_SECRET" "${{ secrets.JWT_SECRET }}"
             
             # Pull the newest Docker images
             docker compose pull
