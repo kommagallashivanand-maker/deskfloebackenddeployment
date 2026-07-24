@@ -53,10 +53,7 @@ services:
   # ---------------------------------------------------------------------------
   backend:
     container_name: deskflow-backend
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    image: deskflow/backend:1.0.0
+    image: ${DOCKERHUB_USERNAME}/backend-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       # Database — uses service name 'postgres' as host (internal DNS)
@@ -98,10 +95,7 @@ services:
   # ---------------------------------------------------------------------------
   ml-service:
     container_name: deskflow-ml-service
-    build:
-      context: .
-      dockerfile: Dockerfile.ml-service
-    image: deskflow/ml-service:1.0.0
+    image: ${DOCKERHUB_USERNAME}/ml-service:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       SERVICE_NAME: "DeskFlow ML Service"
@@ -133,10 +127,7 @@ services:
   # ---------------------------------------------------------------------------
   priority-feature-extraction:
     container_name: deskflow-priority-feature-extraction
-    build:
-      context: .
-      dockerfile: Dockerfile.priority-feature-extraction
-    image: deskflow/priority-feature-extraction:1.0.0
+    image: ${DOCKERHUB_USERNAME}/priority-feature-extraction:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       APP_NAME: "priority_feature_extractor"

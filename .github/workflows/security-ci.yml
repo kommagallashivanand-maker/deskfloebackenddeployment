@@ -3,10 +3,6 @@ name: Security CI
 on:
   push:
     branches:
-      - feature/DF_83_Quality_gates_in_CI
-      - staging
-  pull_request:
-    branches:
       - staging
 
 env:
@@ -675,3 +671,137 @@ jobs:
         with:
           name: security-report
           path: security-reports/security-report.pdf
+
+  build-and-push:
+    name: Build and Push Docker Images
+    needs: [detect, test-python, test-java, dependency-audit, sast, secret-scan]
+    if: |
+      always() &&
+      (needs.detect.result == 'success') &&
+      (needs.test-python.result == 'success' || needs.test-python.result == 'skipped') &&
+      (needs.test-java.result == 'success' || needs.test-java.result == 'skipped') &&
+      (needs.dependency-audit.result == 'success') &&
+      (needs.sast.result == 'success') &&
+      (needs.secret-scan.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Backend API
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/backend-api:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/backend-api:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push ML Service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.ml-service
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ml-service:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ml-service:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push Priority Feature Extraction
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.priority-feature-extraction
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/priority-feature-extraction:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/priority-feature-extraction:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Ensure target directory exists on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/${{ secrets.EC2_USERNAME }}/backend
+
+      - name: Copy docker-compose.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/${{ secrets.EC2_USERNAME }}/backend"
+
+      - name: Deploy containers on EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Log into Docker Hub securely
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+            
+            # Go to deployment directory
+            cd /home/${{ secrets.EC2_USERNAME }}/backend
+            
+            # Ensure .env file exists
+            touch .env
+            
+            # Function to update or add env var in .env
+            update_env_var() {
+              local key=$1
+              local value=$2
+              if grep -q "^${key}=" .env; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            }
+            
+            # Set target username and image tags for docker compose
+            update_env_var "DOCKERHUB_USERNAME" "${{ secrets.DOCKERHUB_USERNAME }}"
+            update_env_var "IMAGE_TAG" "v${{ github.run_number }}"
+            
+            # Pull the newest Docker images
+            docker compose pull
+            
+            # Stop old containers
+            docker compose down
+            
+            # Start new containers
+            docker compose up -d
+            
+            # Clean unused Docker resources (excluding those used by running containers)
+            docker image prune -af
+            docker container prune -f
