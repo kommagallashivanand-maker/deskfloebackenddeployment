@@ -28,14 +28,18 @@ from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+# Use centralized path resolution (Docker-safe)
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from ml.common.paths import get_repo_root, get_training_data_path
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 MODEL_VERSION = "v1.0.0"
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent           # DeskFlow-backend/
-DATA_PATH = REPO_ROOT / "tickets_extracted_features.csv"
+REPO_ROOT = get_repo_root()
+DATA_PATH = get_training_data_path()
 MODELS_DIR = SCRIPT_DIR / "models"
 
 # Feature column groups

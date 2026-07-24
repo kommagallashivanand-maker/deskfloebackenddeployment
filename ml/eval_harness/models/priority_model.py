@@ -5,16 +5,26 @@ Real inference using the trained RandomForest pipeline with REAL feature extract
 from ml/priority_feature_extraction (DF-026).
 """
 
-import os
 import sys
 from pathlib import Path
+
+# Add repo root to path FIRST, before any ml.common imports
+_repo_root = Path(__file__).resolve().parent.parent.parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
 import joblib
 import pandas as pd
 
-# Resolve paths relative to this file
-_current_dir = Path(__file__).resolve().parent.parent.parent
-_model_path = _current_dir / "train_priority_model" / "models" / "priority_model_latest.joblib"
-_feature_extraction_dir = _current_dir / "priority_feature_extraction"
+# Use centralized path resolution (Docker-safe via DESKFLOW_REPO_ROOT env var)
+from ml.common.paths import (
+    get_priority_model_path,
+    get_priority_feature_extraction_dir,
+)
+
+# Resolve paths using centralized module
+_model_path = get_priority_model_path()
+_feature_extraction_dir = get_priority_feature_extraction_dir()
 
 # Add priority_feature_extraction to path so we can import its modules
 if str(_feature_extraction_dir) not in sys.path:
