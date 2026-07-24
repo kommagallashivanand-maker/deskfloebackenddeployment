@@ -1,6 +1,6 @@
-# JWT Authentication Implementation Guide
+# JWT Authentication & Authorization Guide
 
-This document describes the JWT authentication implementation in the DeskFlow backend application.
+This document describes the complete JWT authentication and role-based authorization implementation in the DeskFlow backend.
 
 ---
 
@@ -8,27 +8,36 @@ This document describes the JWT authentication implementation in the DeskFlow ba
 
 1. [Overview](#overview)
 2. [Architecture](#architecture)
-3. [Implementation Details](#implementation-details)
-4. [Configuration](#configuration)
-5. [API Endpoints](#api-endpoints)
-6. [Token Structure](#token-structure)
-7. [Security Flow](#security-flow)
-8. [Testing](#testing)
-9. [Troubleshooting](#troubleshooting)
+3. [Role Matrix](#role-matrix)
+4. [Implementation Details](#implementation-details)
+5. [Configuration](#configuration)
+6. [API Endpoints](#api-endpoints)
+7. [Token Structure](#token-structure)
+8. [Security Flow](#security-flow)
+9. [CORS Configuration](#cors-configuration)
+10. [Testing](#testing)
+11. [Troubleshooting](#troubleshooting)
+12. [Best Practices](#best-practices)
+13. [Dependencies](#dependencies)
+14. [Future Enhancements](#future-enhancements)
 
 ---
 
 ## Overview
 
-The DeskFlow backend implements **stateless JWT-based authentication** using Spring Security and the JJWT library.
+The DeskFlow backend implements **stateless JWT-based authentication and role-based authorization** using Spring Security and the JJWT library.
 
 ### Key Features
 
 - ✅ BCrypt password hashing
 - ✅ Stateless sessions (no HTTP session storage)
-- ✅ JWT tokens with role-based claims
+- ✅ JWT tokens with `userId`, `email`, and `role` claims
 - ✅ Token expiration (configurable via `JWT_EXPIRATION_MS`)
 - ✅ Secure HMAC-SHA256 signing
+- ✅ Role-based access control (RBAC) — EMPLOYEE, AGENT, ADMIN
+- ✅ Admin-provisioned user registration (self-registration disabled)
+- ✅ Structured JSON error responses for 401 and 403
+- ✅ CORS support with configurable allowed origins
 - ✅ Centralized exception handling
 - ✅ Clean separation of concerns (SOLID principles)
 
@@ -49,23 +58,28 @@ The DeskFlow backend implements **stateless JWT-based authentication** using Spr
 ### Component Diagram
 
 ```
-┌─────────────────┐
-│  AuthController │  ← REST endpoints (delegates to service)
-└────────┬────────┘
-         │
+┌──────────────────┐     ┌──────────────────────────┐
+│  AuthController  │     │  TicketController         │
+│  POST /login     │     │  POST /tickets  (EMPLOYEE)│
+│  POST /register  │     │  GET  /tickets  (ALL)     │
+│  (ADMIN only)    │     │  PUT  /tickets  (AGENT/   │
+└────────┬─────────┘     │                  ADMIN)   │
+         │               └──────────────────────────┘
          ↓
 ┌─────────────────┐
-│   AuthService   │  ← Business logic (orchestrates auth flow)
+│   AuthService   │  ← orchestrates auth flow
 └────────┬────────┘
          │
     ┌────┴────┐
     ↓         ↓
-┌─────────┐  ┌──────────┐
-│ JwtSvc  │  │  Spring  │
-│         │  │ Security │
-└─────────┘  └──────────┘
-    ↓              ↓
-   JWT       BCrypt + DB
+┌──────────┐  ┌────────────────┐
+│JwtService│  │Spring Security │
+│(tokens)  │  │(AuthManager +  │
+│          │  │ BCrypt)        │
+└──────────┘  └────────────────┘
+
+Every request passes through:
+JwtAuthenticationFilter → SecurityFilterChain → Controller
 ```
 
 ### File Structure
@@ -73,31 +87,62 @@ The DeskFlow backend implements **stateless JWT-based authentication** using Spr
 ```
 com.p99soft.deskflow/
 ├── config/
-│   ├── JwtProperties.java          # JWT config binding
-│   └── SecurityConfig.java         # Spring Security config
+│   ├── CorsProperties.java             # CORS config binding
+│   ├── JwtProperties.java              # JWT config binding
+│   ├── OpenApiConfig.java              # Swagger Bearer auth scheme
+│   └── SecurityConfig.java            # RBAC + CORS + filter chain
 ├── controller/
-│   └── AuthController.java         # /api/v1/auth/* endpoints
+│   ├── AuthController.java            # /api/v1/auth/*
+│   ├── TicketController.java          # /api/v1/tickets
+│   └── TicketCommentController.java   # /api/v1/tickets/{id}/comments
 ├── dto/
-│   ├── LoginRequest.java           # Login payload
-│   ├── LoginResponse.java          # JWT response
-│   ├── RegisterRequest.java        # Registration payload
-│   └── AuthResponse.java           # Registration response
+│   ├── LoginRequest.java              # Login payload
+│   ├── LoginResponse.java             # JWT response
+│   ├── RegisterRequest.java           # Registration payload
+│   └── AuthResponse.java              # Registration response
 ├── entity/
-│   └── User.java                   # User entity (Role enum)
+│   └── User.java                      # User entity (Role enum)
 ├── enums/
-│   └── Role.java                   # EMPLOYEE | AGENT | ADMIN
+│   └── Role.java                      # EMPLOYEE | AGENT | ADMIN
 ├── repository/
-│   └── UserRepository.java         # findByEmail(), existsByEmail()
+│   └── UserRepository.java            # findByEmail(), existsByEmail()
 ├── security/
-│   ├── JwtService.java             # Token generation & validation
-│   ├── JwtAuthenticationFilter.java # Filter for token validation
-│   ├── UserDetailsImpl.java        # Spring Security adapter
-│   └── UserDetailsServiceImpl.java # Loads user from DB
+│   ├── JwtService.java                # Token generation & validation
+│   ├── JwtAuthenticationFilter.java   # Validates JWT on every request
+│   ├── JwtAuthenticationEntryPoint.java # 401 JSON response
+│   ├── JwtAccessDeniedHandler.java    # 403 JSON response
+│   ├── UserDetailsImpl.java           # Spring Security adapter
+│   └── UserDetailsServiceImpl.java    # Loads user from DB
 └── service/
-    ├── AuthService.java            # Auth interface
+    ├── AuthService.java               # Auth interface
     └── Impl/
-        └── AuthServiceImpl.java    # Auth implementation
+        └── AuthServiceImpl.java       # Auth implementation
 ```
+
+---
+
+## Role Matrix
+
+| Endpoint | EMPLOYEE | AGENT | ADMIN |
+|---|:---:|:---:|:---:|
+| `POST /api/v1/auth/login` | ✅ | ✅ | ✅ |
+| `POST /api/v1/auth/register` | ❌ 403 | ❌ 403 | ✅ |
+| `POST /api/v1/tickets` | ✅ | ❌ 403 | ❌ 403 |
+| `GET /api/v1/tickets` | ✅ | ✅ | ✅ |
+| `GET /api/v1/tickets/{id}` | ✅ | ✅ | ✅ |
+| `PUT /api/v1/tickets/{id}` | ❌ 403 | ✅ | ✅ |
+| `POST /api/v1/tickets/{id}/comments` | ✅ | ✅ | ✅ |
+| `GET /api/v1/tickets/{id}/comments` | ✅ | ✅ | ✅ |
+| `GET /api/v1/tickets/{id}/activities` | ✅ | ✅ | ✅ |
+| No token on any protected endpoint | 401 | 401 | 401 |
+
+### Role Responsibilities
+
+| Role | Description |
+|---|---|
+| `EMPLOYEE` | Raises support tickets, views tickets, adds comments |
+| `AGENT` | Handles and resolves tickets (update/assign), adds comments |
+| `ADMIN` | Manages users (register), views all data, updates tickets |
 
 ---
 
@@ -106,8 +151,6 @@ com.p99soft.deskflow/
 ### 1. User Entity & Role Enum
 
 **File:** `entity/User.java`
-
-The `User` entity uses a `Role` enum (not plain String):
 
 ```java
 @Enumerated(EnumType.STRING)
@@ -119,13 +162,11 @@ private Role role;  // EMPLOYEE | AGENT | ADMIN
 
 ```java
 public enum Role {
-    EMPLOYEE,
-    AGENT,
-    ADMIN
+    EMPLOYEE,  // raises tickets
+    AGENT,     // resolves tickets
+    ADMIN      // manages users and system
 }
 ```
-
-**Database:** The `role` column in the `users` table stores enum values as strings (`VARCHAR(30)`).
 
 ---
 
@@ -133,14 +174,14 @@ public enum Role {
 
 **File:** `config/JwtProperties.java`
 
-Binds properties from `application.yaml`:
+Binds `jwt.*` from `application.yaml`:
 
 ```java
 @Component
 @ConfigurationProperties(prefix = "jwt")
 public class JwtProperties {
-    private String secret;    // Hex-encoded HMAC key
-    private long expiration;  // Milliseconds (default: 24h)
+    private String secret;    // Hex-encoded HMAC-SHA256 key (min 64 hex chars)
+    private long expiration;  // Token validity in milliseconds
 }
 ```
 
@@ -148,43 +189,32 @@ public class JwtProperties {
 
 ```yaml
 jwt:
-  secret: ${JWT_SECRET:<default-256-bit-hex-secret>}
-  expiration: ${JWT_EXPIRATION_MS:<default-expiration-ms>}
-```
-
-**Environment Variables (Production):**
-
-```bash
-JWT_SECRET=<your-256-bit-hex-secret>
-JWT_EXPIRATION_MS=<token-validity-in-milliseconds>
+  secret: ${JWT_SECRET}
+  expiration: ${JWT_EXPIRATION_MS}
 ```
 
 ---
 
-### 3. JwtService (Token Operations)
+### 3. JwtService
 
 **File:** `security/JwtService.java`
 
-**Responsibilities:**
-- Generate signed JWT from `User` entity
-- Parse and validate tokens
-- Extract claims (`email`, `userId`, `role`)
-
-**Key Methods:**
+Single responsibility: JWT generation, validation, and claim extraction only.
 
 ```java
-public String generateToken(User user)
+public String generateToken(User user)          // builds signed JWT
 public boolean isTokenValid(String token, UserDetails userDetails)
-public String extractEmail(String token)
-public UUID extractUserId(String token)
-public String extractRole(String token)
+public String extractEmail(String token)         // reads sub claim
+public UUID   extractUserId(String token)        // reads userId claim
+public String extractRole(String token)          // reads role claim
 ```
 
-**Design Notes:**
-- **Single Responsibility:** Only handles JWT mechanics, no auth business logic
-- **Stateless:** No database calls, no session storage
-- Uses JJWT library for all crypto operations
-- Signing key derived from hex secret in config
+Token payload includes:
+- `sub` — user email
+- `userId` — UUID
+- `role` — EMPLOYEE / AGENT / ADMIN
+- `iat` — issued at
+- `exp` — expiration
 
 ---
 
@@ -192,58 +222,59 @@ public String extractRole(String token)
 
 **File:** `security/JwtAuthenticationFilter.java`
 
-**Purpose:** Intercepts every HTTP request and validates the JWT in the `Authorization` header.
-
-**Flow:**
+Runs on every request before Spring's default filter:
 
 ```
-1. Extract Bearer token from Authorization header
-2. If no token → skip (public endpoint or will be rejected by SecurityFilterChain)
-3. If token exists:
-   a. Parse token → extract email
-   b. Load UserDetails from database
-   c. Validate token (signature + expiration + email match)
-   d. If valid → set SecurityContext with authenticated principal
-4. Continue filter chain
+1. Read Authorization header
+2. If missing or not "Bearer " → skip (let SecurityFilterChain handle it)
+3. Extract and parse JWT
+4. Load UserDetails from DB by email
+5. Validate token (signature + expiry + email match)
+6. If valid → populate SecurityContext
+7. Continue filter chain
 ```
-
-**Integration:** Registered in `SecurityConfig` to run **before** `UsernamePasswordAuthenticationFilter`.
 
 ---
 
-### 5. AuthService & AuthServiceImpl
+### 5. JwtAuthenticationEntryPoint
 
-**File:** `service/AuthService.java` (Interface)
+**File:** `security/JwtAuthenticationEntryPoint.java`
 
-```java
-AuthResponse register(RegisterRequest request);
-LoginResponse login(LoginRequest request);
+Returns structured `401 Unauthorized` JSON when:
+- No token is present on a protected endpoint
+- Token is expired, malformed, or has invalid signature
+
+```json
+{
+  "timestamp": "<timestamp>",
+  "status": 401,
+  "error": "Unauthorized",
+  "message": "Access denied: Authorization header is missing",
+  "details": "uri=<request-uri>"
+}
 ```
-
-**File:** `service/Impl/AuthServiceImpl.java`
-
-**`register()` Logic:**
-1. Check if email already exists → throw `IllegalArgumentException`
-2. Hash password using `BCryptPasswordEncoder`
-3. Save user to database
-4. Return `AuthResponse` (no JWT — user must log in)
-
-**`login()` Logic:**
-1. Delegate credential validation to `AuthenticationManager` (Spring Security)
-2. If valid → extract `User` from `UserDetailsImpl`
-3. Generate JWT via `JwtService.generateToken(user)`
-4. Return `LoginResponse` with token + user metadata
-
-**Dependencies Injected:**
-- `UserRepository`
-- `TeamRepository`
-- `PasswordEncoder` (BCrypt)
-- `AuthenticationManager` (Spring Security)
-- `JwtService` (our custom service)
 
 ---
 
-### 6. SecurityConfig
+### 6. JwtAccessDeniedHandler
+
+**File:** `security/JwtAccessDeniedHandler.java`
+
+Returns structured `403 Forbidden` JSON when an authenticated user lacks the required role:
+
+```json
+{
+  "timestamp": "<timestamp>",
+  "status": 403,
+  "error": "Forbidden",
+  "message": "Access denied: you do not have permission to perform this action. ADMIN role required.",
+  "details": "uri=<request-uri>"
+}
+```
+
+---
+
+### 7. SecurityConfig
 
 **File:** `config/SecurityConfig.java`
 
@@ -251,65 +282,63 @@ LoginResponse login(LoginRequest request);
 
 | Bean | Purpose |
 |---|---|
-| `PasswordEncoder` | BCrypt with default strength (10) |
-| `AuthenticationProvider` | `DaoAuthenticationProvider` backed by `UserDetailsService` |
+| `PasswordEncoder` | BCrypt with default strength 10 |
+| `AuthenticationProvider` | `DaoAuthenticationProvider` + BCrypt |
 | `AuthenticationManager` | Exposed for programmatic auth in `AuthServiceImpl` |
-| `SecurityFilterChain` | HTTP security rules + filter registration |
+| `CorsConfigurationSource` | Reads allowed origins from `CorsProperties` |
+| `SecurityFilterChain` | Full RBAC rules + CORS + exception handlers |
 
-**Security Rules:**
-
-```java
-.authorizeHttpRequests(auth -> auth
-    .requestMatchers(
-        "/api/v1/auth/**",      // Public: register, login
-        "/swagger-ui/**",        // Public: API docs
-        "/v3/api-docs/**",       // Public: OpenAPI spec
-        "/actuator/health"       // Public: health check
-    ).permitAll()
-    .anyRequest().authenticated()  // Everything else requires JWT
-)
-```
-
-**Session Management:**
+**Authorization Rules (URL level):**
 
 ```java
-.sessionManagement(session -> session
-    .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-)
+// Public
+POST  /api/v1/auth/login       → permitAll()
+      /swagger-ui/**           → permitAll()
+      /v3/api-docs/**          → permitAll()
+      /actuator/health         → permitAll()
+
+// Role-restricted
+POST  /api/v1/auth/register    → hasRole("ADMIN")
+POST  /api/v1/tickets          → hasRole("EMPLOYEE")
+PUT   /api/v1/tickets/**       → hasAnyRole("AGENT", "ADMIN")
+GET   /api/v1/tickets/**       → hasAnyRole("EMPLOYEE", "AGENT", "ADMIN")
+
+// Catch-all
+*                              → authenticated()
 ```
 
-No HTTP session is created or used — purely JWT-based.
-
-**Filter Chain:**
-
-```java
-.addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
-```
-
-JWT filter runs **before** default Spring Security filters.
+**Method-level security** (`@PreAuthorize`) mirrors URL rules on each controller method as a second enforcement layer.
 
 ---
 
-### 7. DTOs
+### 8. AuthService & AuthServiceImpl
+
+**`register()` — ADMIN calls this:**
+1. Verify email not already registered
+2. Hash password with BCrypt
+3. Save user to DB
+4. Return `AuthResponse` (no JWT — user must log in separately)
+
+**`login()` — all roles:**
+1. Authenticate via `AuthenticationManager`
+2. Spring Security validates credentials + BCrypt hash
+3. `JwtService.generateToken(user)` creates signed JWT
+4. Return `LoginResponse` with token + user metadata
+
+---
+
+### 9. DTOs
 
 #### LoginRequest
-
-```java
+```json
 {
   "email": "<user@example.com>",
   "password": "<password>"
 }
 ```
 
-**Validation:**
-- `@NotBlank` on email and password
-- `@Email` on email
-
----
-
 #### LoginResponse
-
-```java
+```json
 {
   "token": "<jwt-token>",
   "tokenType": "Bearer",
@@ -320,32 +349,21 @@ JWT filter runs **before** default Spring Security filters.
 }
 ```
 
-**Fields:**
-- `token` — the signed JWT
-- `tokenType` — always `"Bearer"`
-- `userId`, `email`, `fullName`, `role` — user metadata
-
----
-
-#### RegisterRequest
-
-```java
+#### RegisterRequest (ADMIN only)
+```json
 {
-  "employeeCode": "<employee-code>",    // Optional
+  "employeeCode": "<employee-code>",
   "firstName": "<first-name>",
   "lastName": "<last-name>",
   "email": "<user@example.com>",
   "password": "<password>",
-  "role": "<EMPLOYEE|AGENT|ADMIN>",     // Required
-  "teamId": "<team-uuid>"               // Optional
+  "role": "<EMPLOYEE|AGENT|ADMIN>",
+  "teamId": "<team-uuid>"
 }
 ```
 
----
-
-#### AuthResponse (Register)
-
-```java
+#### AuthResponse (register success)
+```json
 {
   "userId": "<uuid>",
   "email": "<user@example.com>",
@@ -354,8 +372,6 @@ JWT filter runs **before** default Spring Security filters.
   "message": "User registered successfully"
 }
 ```
-
-**No JWT returned** — user must call `/login` to get a token.
 
 ---
 
@@ -364,38 +380,32 @@ JWT filter runs **before** default Spring Security filters.
 ### application.yaml
 
 ```yaml
-spring:
-  datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
-  
-  jpa:
-    hibernate:
-      ddl-auto: validate
-  
-  security:
-    # Spring Security auto-config is overridden by SecurityConfig
-
 jwt:
   secret: ${JWT_SECRET}
   expiration: ${JWT_EXPIRATION_MS}
+
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}
+  allowed-methods: GET,POST,PUT,DELETE,PATCH,OPTIONS
+  allowed-headers: "*"
+  allow-credentials: true
+  max-age: 3600
 ```
 
 ### Environment Variables
 
-| Variable | Description | Example |
-|---|---|---|
-| `JWT_SECRET` | 256-bit hex-encoded HMAC key | `<64-char-hex-string>` |
-| `JWT_EXPIRATION_MS` | Token validity in milliseconds | `<expiration-in-ms>` |
-| `DB_URL` | JDBC connection string | `jdbc:postgresql://<host>:<port>/<database>` |
-| `DB_USERNAME` | Database username | `<your-db-username>` |
-| `DB_PASSWORD` | Database password | `<your-db-password>` |
+| Variable | Description |
+|---|---|
+| `JWT_SECRET` | 256-bit hex-encoded HMAC key (min 64 hex chars) |
+| `JWT_EXPIRATION_MS` | Token validity in milliseconds |
+| `DB_URL` | JDBC connection string |
+| `DB_USERNAME` | Database username |
+| `DB_PASSWORD` | Database password |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed frontend origins |
 
 **Generate a secure JWT secret:**
 
 ```bash
-# 256-bit random hex (64 characters)
 openssl rand -hex 32
 ```
 
@@ -403,12 +413,28 @@ openssl rand -hex 32
 
 ## API Endpoints
 
-### Public Endpoints (No Auth Required)
+### Public
 
-#### 1. Register User
+#### Login
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
 
+{
+  "email": "<user@example.com>",
+  "password": "<password>"
+}
+```
+**Response `200 OK`:** `LoginResponse` with JWT token
+
+---
+
+### ADMIN Only
+
+#### Register User
 ```http
 POST /api/v1/auth/register
+Authorization: Bearer <admin-jwt-token>
 Content-Type: application/json
 
 {
@@ -419,330 +445,247 @@ Content-Type: application/json
   "role": "<EMPLOYEE|AGENT|ADMIN>"
 }
 ```
-
-**Response (201 Created):**
-
-```json
-{
-  "userId": "<uuid>",
-  "email": "<user@example.com>",
-  "fullName": "<First Last>",
-  "role": "<EMPLOYEE|AGENT|ADMIN>",
-  "message": "User registered successfully"
-}
-```
+**Response `201 Created`:** `AuthResponse`
+**`401`** — no/invalid token | **`403`** — not ADMIN
 
 ---
 
-#### 2. Login
+### EMPLOYEE Only
 
+#### Create Ticket
 ```http
-POST /api/v1/auth/login
+POST /api/v1/tickets
+Authorization: Bearer <employee-jwt-token>
 Content-Type: application/json
 
 {
-  "email": "<user@example.com>",
-  "password": "<password>"
+  "title": "<ticket-title>",
+  "description": "<ticket-description>",
+  "priority": "<LOW|MEDIUM|HIGH|URGENT>",
+  "categoryId": "<category-uuid>",
+  "createdBy": "<user-uuid>"
 }
 ```
-
-**Response (200 OK):**
-
-```json
-{
-  "token": "<jwt-token>",
-  "tokenType": "Bearer",
-  "userId": "<uuid>",
-  "email": "<user@example.com>",
-  "fullName": "<First Last>",
-  "role": "<EMPLOYEE|AGENT|ADMIN>"
-}
-```
-
-**Error (401 Unauthorized):**
-
-```json
-{
-  "timestamp": "<timestamp>",
-  "status": 401,
-  "error": "Unauthorized",
-  "message": "Authentication failed: Bad credentials",
-  "details": "uri=/api/v1/auth/login"
-}
-```
+**Response `201 Created`:** `TicketResponse`
+**`403`** — AGENT and ADMIN cannot create tickets
 
 ---
 
-### Protected Endpoints (JWT Required)
+### AGENT and ADMIN
 
-All endpoints under `/api/v1/tickets`, `/api/v1/users`, etc. require a valid JWT.
+#### Update Ticket
+```http
+PUT /api/v1/tickets/{id}
+Authorization: Bearer <agent-or-admin-jwt-token>
+Content-Type: application/json
+```
+**Response `200 OK`:** `TicketResponse`
+**`403`** — EMPLOYEE cannot update tickets
 
-**Example:**
+---
 
+### All Authenticated Users
+
+#### List Tickets
 ```http
 GET /api/v1/tickets
 Authorization: Bearer <jwt-token>
 ```
 
-**No token or invalid token → 401 Unauthorized**
+#### Get Ticket
+```http
+GET /api/v1/tickets/{id}
+Authorization: Bearer <jwt-token>
+```
+
+#### Add Comment
+```http
+POST /api/v1/tickets/{id}/comments
+Authorization: Bearer <jwt-token>
+```
+
+#### Get Comments
+```http
+GET /api/v1/tickets/{id}/comments
+Authorization: Bearer <jwt-token>
+```
+
+#### Get Activity Timeline
+```http
+GET /api/v1/tickets/{id}/activities
+Authorization: Bearer <jwt-token>
+```
 
 ---
 
 ## Token Structure
 
-### JWT Payload (Claims)
+### JWT Payload
 
 ```json
 {
-  "sub": "<user@example.com>",       // Subject (email)
-  "userId": "<uuid>",                 // Custom claim
-  "role": "<EMPLOYEE|AGENT|ADMIN>",   // Custom claim
-  "iat": <unix-timestamp>,            // Issued at (Unix timestamp)
-  "exp": <unix-timestamp>             // Expiration (Unix timestamp)
+  "sub": "<user@example.com>",
+  "userId": "<uuid>",
+  "role": "<EMPLOYEE|AGENT|ADMIN>",
+  "iat": "<unix-issued-at>",
+  "exp": "<unix-expiration>"
 }
 ```
 
-### JWT Header
-
-```json
-{
-  "alg": "HS256",                     // HMAC-SHA256
-  "typ": "JWT"
-}
-```
-
-### Signature
-
-```
-HMACSHA256(
-  base64UrlEncode(header) + "." + base64UrlEncode(payload),
-  secret
-)
-```
-
-**Decode a token:** Paste it into **[jwt.io](https://jwt.io)** to inspect the payload.
+**Decode tokens at:** [jwt.io](https://jwt.io)
 
 ---
 
 ## Security Flow
 
-### 1. Registration Flow
+### Login Flow
 
 ```
-User → POST /register
+POST /login
   ↓
-AuthController.register()
-  ↓
-AuthService.register()
-  ↓
-Check email exists? → Yes: throw IllegalArgumentException
-  ↓ No
-Hash password (BCrypt)
-  ↓
-Save User to DB
-  ↓
-Return AuthResponse (no JWT)
-```
-
----
-
-### 2. Login Flow
-
-```
-User → POST /login
-  ↓
-AuthController.login()
-  ↓
-AuthService.login()
-  ↓
-AuthenticationManager.authenticate()
-  ↓
-UserDetailsService.loadUserByUsername()
-  ↓
-Query DB → User found? → No: throw UsernameNotFoundException (401)
-  ↓ Yes
-BCrypt.matches(inputPassword, dbHash) → No: throw BadCredentialsException (401)
-  ↓ Yes
-Return UserDetailsImpl
-  ↓
-JwtService.generateToken(user)
-  ↓
-Return LoginResponse with JWT
-```
-
----
-
-### 3. Authenticated Request Flow
-
-```
-User → GET /tickets (with Authorization: Bearer <token>)
-  ↓
-JwtAuthenticationFilter.doFilterInternal()
-  ↓
-Extract token from header
-  ↓
-JwtService.extractEmail(token)
+AuthenticationManager.authenticate(email, password)
   ↓
 UserDetailsService.loadUserByUsername(email)
   ↓
-JwtService.isTokenValid(token, userDetails) → No: continue without auth (401)
-  ↓ Yes
-Set SecurityContext.authentication
+DB lookup → not found → 401
+  ↓ found
+BCrypt.matches(input, hash) → mismatch → 401
+  ↓ match
+JwtService.generateToken(user)
   ↓
-Continue filter chain
-  ↓
-TicketController.listTickets()
-  ↓
-@PreAuthorize or SecurityContext used to check permissions
-  ↓
-Return tickets (200 OK)
+Return LoginResponse { token, tokenType, userId, email, fullName, role }
 ```
+
+### Authenticated Request Flow
+
+```
+Request with Authorization: Bearer <token>
+  ↓
+JwtAuthenticationFilter
+  ↓
+Extract + validate token
+  ↓
+Invalid/expired → JwtAuthenticationEntryPoint → 401 JSON
+  ↓ valid
+Populate SecurityContext
+  ↓
+SecurityFilterChain URL rules → wrong role → JwtAccessDeniedHandler → 403 JSON
+  ↓ authorized
+@PreAuthorize on method → wrong role → 403 JSON
+  ↓ authorized
+Controller → Service → Response
+```
+
+---
+
+## CORS Configuration
+
+**File:** `config/CorsProperties.java`
+
+Binds `cors.*` from `application.yaml`:
+
+```java
+@Component
+@ConfigurationProperties(prefix = "cors")
+public class CorsProperties {
+    private List<String> allowedOrigins;
+    private List<String> allowedMethods;
+    private List<String> allowedHeaders;
+    private boolean allowCredentials;
+    private long maxAge;
+}
+```
+
+**Production setup:**
+
+```bash
+CORS_ALLOWED_ORIGINS=https://your-frontend-domain.com
+```
+
+CORS is registered in `SecurityConfig` via `CorsConfigurationSource` bean and applied with `.cors(cors -> cors.configurationSource(...))`.
 
 ---
 
 ## Testing
 
-### Postman Collection
+### Postman Quick Reference
 
-### Quick Test Sequence
+| Step | Method | Endpoint | Auth | Expected |
+|---|---|---|---|---|
+| Login as ADMIN | POST | `/api/v1/auth/login` | none | `200` + token |
+| Register EMPLOYEE | POST | `/api/v1/auth/register` | ADMIN token | `201` |
+| EMPLOYEE registers (blocked) | POST | `/api/v1/auth/register` | EMPLOYEE token | `403` |
+| EMPLOYEE creates ticket | POST | `/api/v1/tickets` | EMPLOYEE token | `201` |
+| AGENT creates ticket (blocked) | POST | `/api/v1/tickets` | AGENT token | `403` |
+| ADMIN creates ticket (blocked) | POST | `/api/v1/tickets` | ADMIN token | `403` |
+| AGENT updates ticket | PUT | `/api/v1/tickets/{id}` | AGENT token | `200` |
+| EMPLOYEE updates ticket (blocked) | PUT | `/api/v1/tickets/{id}` | EMPLOYEE token | `403` |
+| Anyone views tickets | GET | `/api/v1/tickets` | any token | `200` |
+| No token on protected endpoint | GET | `/api/v1/tickets` | none | `401` |
+| Expired/malformed token | GET | `/api/v1/tickets` | bad token | `401` |
 
-```bash
-# 1. Register
-POST /api/v1/auth/register
-Body: { "firstName": "<first>", "lastName": "<last>", "email": "<user@example.com>", "password": "<password>", "role": "EMPLOYEE" }
+### Auto-Save Tokens (Post-response script)
 
-# 2. Login
-POST /api/v1/auth/login
-Body: { "email": "<user@example.com>", "password": "<password>" }
-Response: { "token": "<jwt-token>" }
-
-# 3. Access protected endpoint
-GET /api/v1/tickets
-Header: Authorization: Bearer <jwt-token>
-Response: 200 OK
+```javascript
+// Run on login responses to save tokens as collection variables
+const role = pm.response.json().role;
+const token = pm.response.json().token;
+if (role === "ADMIN")    pm.collectionVariables.set("adminToken", token);
+if (role === "AGENT")    pm.collectionVariables.set("agentToken", token);
+if (role === "EMPLOYEE") pm.collectionVariables.set("employeeToken", token);
 ```
 
 ---
 
 ## Troubleshooting
 
-### Issue: "401 Unauthorized" on Login
+### 401 on Login
+- Wrong email or password
+- User status is not `ACTIVE`
+- Password stored as plain text — needs BCrypt hash
 
-**Cause:** Invalid email or password
-
-**Solution:**
-1. Check the database: `SELECT email, role FROM users WHERE email = '<user@example.com>';`
-2. Verify password hash starts with `$2a$` or `$2b$` (BCrypt)
-3. If password is plain text, hash it:
-   ```sql
-   UPDATE users 
-   SET password = '<bcrypt-hash>'
-   WHERE email = '<user@example.com>';
-   ```
-
----
-
-### Issue: "401 Unauthorized" on Protected Endpoint
-
-**Cause:** Missing, invalid, or expired JWT
-
-**Checklist:**
-- [ ] Token is in the `Authorization` header
-- [ ] Header format is exactly: `Bearer <token>` (with space after `Bearer`)
-- [ ] Token has not expired (check `exp` claim at jwt.io)
-- [ ] Token signature is valid (secret key matches)
-- [ ] User still exists in the database
-
-**Debug:**
-```bash
-# Check token expiration
-curl -H "Authorization: Bearer <your-jwt-token>" http://localhost:<port>/actuator/health
-```
-
----
-
-### Issue: "Malformed JWT" or "Signature Verification Failed"
-
-**Cause:** JWT secret changed or token tampered
-
-**Solution:**
-1. Ensure `JWT_SECRET` environment variable is consistent across restarts
-2. Generate a new token by logging in again
-3. Old tokens become invalid when secret changes
-
----
-
-### Issue: Token Works in Postman But Not in Browser
-
-**Cause:** CORS or browser-specific security policy
-
-**Solution:**
-Add CORS configuration to `SecurityConfig`:
-
-```java
-@Bean
-public CorsConfigurationSource corsConfigurationSource() {
-    CorsConfiguration config = new CorsConfiguration();
-    config.setAllowedOrigins(List.of("<your-frontend-origin>"));
-    config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE"));
-    config.setAllowedHeaders(List.of("*"));
-    config.setAllowCredentials(true);
-    UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-    source.registerCorsConfiguration("/**", config);
-    return source;
-}
-```
-
-Then in `SecurityFilterChain`:
-```java
-http.cors(cors -> cors.configurationSource(corsConfigurationSource()))
-```
-
----
-
-### Issue: "Table 'flyway_schema_history' has failed migration"
-
-**Cause:** Flyway V4 migration failed (role constraint violation)
-
-**Solution:**
 ```sql
-DELETE FROM flyway_schema_history WHERE version = '4';
+-- Check user exists and is active
+SELECT email, role, status FROM users WHERE email = '<user@example.com>';
+
+-- Update to BCrypt hash if plain text
+UPDATE users SET password = '<bcrypt-hash>' WHERE email = '<user@example.com>';
 ```
 
-Then restart the application.
+### 401 on Protected Endpoint
+- Missing `Authorization` header
+- Header format wrong — must be `Bearer <token>` (space required)
+- Token expired — check `exp` claim at jwt.io
+- Token signature invalid — `JWT_SECRET` changed
+
+### 403 on Endpoint
+- Authenticated but wrong role — check the [Role Matrix](#role-matrix)
+- Verify the role stored in DB: `SELECT email, role FROM users;`
+
+### CORS Error in Browser
+- Add frontend origin to `CORS_ALLOWED_ORIGINS` env var
+- Ensure `OPTIONS` is in `cors.allowed-methods`
+
+### Flyway Failed Migration
+```sql
+DELETE FROM flyway_schema_history WHERE version = '4' AND success = false;
+```
 
 ---
 
 ## Best Practices
 
-### Security
-
-- ✅ **Never log JWTs** — they're credentials
-- ✅ **Use HTTPS in production** — tokens sent over HTTP can be intercepted
-- ✅ **Rotate JWT secrets periodically** (invalidates all existing tokens)
-- ✅ **Use environment variables** for secrets, never hardcode
-- ✅ **Set short expiration times** (1-24 hours) and implement refresh tokens for long-lived sessions
-- ✅ **Validate all inputs** — use `@Valid` on DTOs
-
-### Development
-
-- ✅ **Test with expired tokens** — set `jwt.expiration=<short-ms>` for testing
-- ✅ **Use jwt.io** to decode tokens during debugging
-- ✅ **Check logs** — `JwtAuthenticationFilter` logs warnings on invalid tokens
-- ✅ **Handle exceptions** — `GlobalExceptionHandler` centralizes all error responses
-
-### Database
-
-- ✅ **Always use BCrypt** for passwords — never plain text
-- ✅ **Email is unique** — enforced by DB constraint
-- ✅ **Role is enum** — prevents invalid values
-- ✅ **User status** — `ACTIVE` users can log in, others are rejected
+- ✅ Never log JWTs — they are credentials
+- ✅ Use HTTPS in production
+- ✅ Store `JWT_SECRET` in a secrets manager, never in code
+- ✅ Keep token expiration short (1–24 hours)
+- ✅ Defense in depth — URL rules + `@PreAuthorize` both enforced
+- ✅ Return `401` for missing/invalid tokens, `403` for wrong role
+- ✅ Admin-provisioned registration — no self-registration
 
 ---
 
 ## Dependencies
-
-### pom.xml
 
 ```xml
 <!-- JWT -->
@@ -775,37 +718,13 @@ Then restart the application.
 
 ## Future Enhancements
 
-### Planned Features
-
-- [ ] **Refresh tokens** — long-lived tokens for mobile apps
-- [ ] **Token revocation** — blacklist tokens before expiration
-- [ ] **Multi-factor authentication (MFA)** — TOTP or SMS OTP
-- [ ] **OAuth2 integration** — Google, Microsoft, etc.
-- [ ] **Rate limiting** — prevent brute-force attacks on `/login`
-- [ ] **Account lockout** — disable account after N failed login attempts
-- [ ] **Password reset** — email-based reset flow
-- [ ] **Audit log** — track all login attempts and security events
-
----
-
-## References
-
-- [Spring Security Documentation](https://docs.spring.io/spring-security/reference/index.html)
-- [JJWT Library](https://github.com/jwtk/jjwt)
-- [JWT.io](https://jwt.io)
-- [BCrypt Calculator](https://bcrypt-generator.com/)
-- [OWASP JWT Security Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/JSON_Web_Token_for_Java_Cheat_Sheet.html)
-
----
-
-## Changelog
-
-| Date | Change |
-|---|---|
-| `<date>` | Initial JWT implementation |
-| `<date>` | Added role-based claims to JWT |
-| `<date>` | Configured stateless session management |
-| `<date>` | Created comprehensive documentation |
+- [ ] Refresh tokens — avoid repeated logins on expiry
+- [ ] Token revocation / blacklist
+- [ ] Rate limiting on `/login` — prevent brute force
+- [ ] Account lockout after N failed attempts
+- [ ] Password reset via email
+- [ ] MFA — TOTP or SMS OTP
+- [ ] OAuth2 — Google/Microsoft SSO
 
 ---
 
