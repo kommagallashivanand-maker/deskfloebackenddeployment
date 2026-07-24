@@ -1,2 +1,9 @@
 pytest
 pytest-cov
+
+# Model dependencies
+joblib
+scikit-learn
+pandas
+numpy
+sentence-transformers

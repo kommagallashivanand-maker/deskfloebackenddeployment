@@ -28,10 +28,21 @@ def get_git_commit() -> str:
 
 def check_thresholds(aggregate_metrics: dict) -> bool:
     """
-    Validates metrics against thresholds.
+    Validates metrics against CI quality thresholds.
     
-    TODO: Set real threshold values once real trained models exist (DF-022, DF-023, DF-027).
-    Currently, all thresholds are set to 0.0 to verify structural correctness.
+    Thresholds are set at ~15% below the baseline real-model performance observed
+    on 2026-07-23 (git commit a5cd9c9) to allow for normal variance while catching
+    genuine regressions.
+    
+    Baseline numbers from real eval run:
+    - category_baseline:    macro-F1 = 0.9209
+    - category_embeddings:  macro-F1 = 0.8163
+    - priority_model:       macro-Precision = 0.5232, macro-Recall = 0.6694
+    
+    CI Thresholds (15% below baseline):
+    - category_baseline:    macro-F1 >= 0.78
+    - category_embeddings:  macro-F1 >= 0.69
+    - priority_model:       macro-Precision >= 0.44, macro-Recall >= 0.57
     
     Args:
         aggregate_metrics: The calculated aggregate metrics dict.
@@ -39,30 +50,79 @@ def check_thresholds(aggregate_metrics: dict) -> bool:
     Returns:
         True if all metrics meet or exceed the thresholds, False otherwise.
     """
-    # Check category baseline F1 scores
-    for cls, f1 in aggregate_metrics.get("category_baseline_f1", {}).items():
-        if f1 < 0.0:
-            print(f"Error: category_baseline_f1 for class '{cls}' ({f1}) is below threshold 0.0", file=sys.stderr)
-            return False
-            
-    # Check category embeddings F1 scores
-    for cls, f1 in aggregate_metrics.get("category_embeddings_f1", {}).items():
-        if f1 < 0.0:
-            print(f"Error: category_embeddings_f1 for class '{cls}' ({f1}) is below threshold 0.0", file=sys.stderr)
-            return False
-            
-    # Check priority precision & recall scores
-    for cls, metrics in aggregate_metrics.get("priority_precision_recall", {}).items():
-        precision = metrics.get("precision", 0.0)
-        recall = metrics.get("recall", 0.0)
-        if precision < 0.0:
-            print(f"Error: priority precision for class '{cls}' ({precision}) is below threshold 0.0", file=sys.stderr)
-            return False
-        if recall < 0.0:
-            print(f"Error: priority recall for class '{cls}' ({recall}) is below threshold 0.0", file=sys.stderr)
-            return False
-            
-    return True
+    # Calculate macro-F1 for category models
+    baseline_f1s = list(aggregate_metrics.get("category_baseline_f1", {}).values())
+    if not baseline_f1s:
+        print("Error: category_baseline_f1 metrics missing", file=sys.stderr)
+        return False
+    macro_f1_baseline = sum(baseline_f1s) / len(baseline_f1s)
+    
+    embeddings_f1s = list(aggregate_metrics.get("category_embeddings_f1", {}).values())
+    if not embeddings_f1s:
+        print("Error: category_embeddings_f1 metrics missing", file=sys.stderr)
+        return False
+    macro_f1_embeddings = sum(embeddings_f1s) / len(embeddings_f1s)
+    
+    # Calculate macro precision/recall for priority model
+    priority_pr = aggregate_metrics.get("priority_precision_recall", {})
+    if not priority_pr:
+        print("Error: priority_precision_recall metrics missing", file=sys.stderr)
+        return False
+    
+    prec_vals = [v.get("precision", 0.0) for v in priority_pr.values()]
+    rec_vals = [v.get("recall", 0.0) for v in priority_pr.values()]
+    macro_precision = sum(prec_vals) / len(prec_vals) if prec_vals else 0.0
+    macro_recall = sum(rec_vals) / len(rec_vals) if rec_vals else 0.0
+    
+    # Define thresholds (15% below baseline)
+    THRESHOLD_BASELINE_F1 = 0.78
+    THRESHOLD_EMBEDDINGS_F1 = 0.69
+    THRESHOLD_PRIORITY_PRECISION = 0.44
+    THRESHOLD_PRIORITY_RECALL = 0.57
+    
+    # Check thresholds
+    passed = True
+    
+    if macro_f1_baseline < THRESHOLD_BASELINE_F1:
+        print(
+            f"FAIL: category_baseline macro-F1 ({macro_f1_baseline:.4f}) "
+            f"is below threshold {THRESHOLD_BASELINE_F1:.4f}",
+            file=sys.stderr
+        )
+        passed = False
+    
+    if macro_f1_embeddings < THRESHOLD_EMBEDDINGS_F1:
+        print(
+            f"FAIL: category_embeddings macro-F1 ({macro_f1_embeddings:.4f}) "
+            f"is below threshold {THRESHOLD_EMBEDDINGS_F1:.4f}",
+            file=sys.stderr
+        )
+        passed = False
+    
+    if macro_precision < THRESHOLD_PRIORITY_PRECISION:
+        print(
+            f"FAIL: priority_model macro-Precision ({macro_precision:.4f}) "
+            f"is below threshold {THRESHOLD_PRIORITY_PRECISION:.4f}",
+            file=sys.stderr
+        )
+        passed = False
+    
+    if macro_recall < THRESHOLD_PRIORITY_RECALL:
+        print(
+            f"FAIL: priority_model macro-Recall ({macro_recall:.4f}) "
+            f"is below threshold {THRESHOLD_PRIORITY_RECALL:.4f}",
+            file=sys.stderr
+        )
+        passed = False
+    
+    if passed:
+        print(f"PASS: All models meet CI quality thresholds:")
+        print(f"  category_baseline:    macro-F1 = {macro_f1_baseline:.4f} (>= {THRESHOLD_BASELINE_F1:.4f})")
+        print(f"  category_embeddings:  macro-F1 = {macro_f1_embeddings:.4f} (>= {THRESHOLD_EMBEDDINGS_F1:.4f})")
+        print(f"  priority_model:       macro-Precision = {macro_precision:.4f} (>= {THRESHOLD_PRIORITY_PRECISION:.4f})")
+        print(f"  priority_model:       macro-Recall = {macro_recall:.4f} (>= {THRESHOLD_PRIORITY_RECALL:.4f})")
+    
+    return passed
 
 def main():
     # File paths
