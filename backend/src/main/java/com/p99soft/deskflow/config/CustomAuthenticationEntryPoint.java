@@ -28,10 +28,14 @@ public class CustomAuthenticationEntryPoint implements AuthenticationEntryPoint 
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
 
-        String message = "Authentication failed: " + authException.getMessage();
+        String message;
         Exception jwtException = (Exception) request.getAttribute("jwt_exception");
         if (jwtException != null) {
             message = jwtException.getMessage();
+        } else if (authException != null) {
+            message = "Authentication failed: " + authException.getMessage();
+        } else {
+            message = "Authentication failed";
         }
 
         ApiErrorResponse errorResponse = ApiErrorResponse.builder()
