@@ -18,6 +18,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import jakarta.validation.Valid;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -47,6 +50,12 @@ import java.util.UUID;
 public class TicketController {
 
     private final TicketService ticketService;
+
+
+    @PostMapping
+    @Operation(
+        summary = "Create a new ticket", 
+        description = "Creates a ticket using the provided details. All mandatory fields (title, priority, categoryId, createdBy) must be present and valid."
     private final ObjectMapper objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
     private final Validator validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
@@ -65,10 +74,15 @@ public class TicketController {
             content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
     })
     public ResponseEntity<TicketResponse> createTicket(@RequestBody @Valid TicketRequest request) {
+
+        log.info("REST request to create ticket: {}", request.getTitle());
+
         log.info("REST request to create ticket (JSON): {}", request.getTitle());
+      
         TicketResponse response = ticketService.createTicket(request);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
+
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @Operation(
@@ -99,6 +113,7 @@ public class TicketController {
         TicketResponse response = ticketService.createTicket(request, files);
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
+
 
     @GetMapping("/{id}")
     @Operation(
@@ -177,6 +192,7 @@ public class TicketController {
             @Parameter(description = "Filter tickets by Assignee User UUID", example = "20000000-0000-0000-0000-000000000001")
             @RequestParam(name = "assignee", required = false) UUID assignedTo,
             
+
             @Parameter(description = "Free-text search across ticket number, title, and description", example = "VPN")
             @RequestParam(required = false) String search,
             
@@ -185,6 +201,10 @@ public class TicketController {
             
             @Parameter(description = "Sorting direction ('asc' for ascending, 'desc' for descending)", example = "desc")
             @RequestParam(defaultValue = "desc") String sortDir) {
+
+        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, sortBy={}, sortDir={}",
+                page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
+        PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, sortBy, sortDir);
         log.info("REST request to list tickets: page={}, size={}, status={}, priority={}, categoryId={}, assignedTo={}, search={}, sortBy={}, sortDir={}",
                 page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);
         PageResponse<TicketResponse> response = ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir);

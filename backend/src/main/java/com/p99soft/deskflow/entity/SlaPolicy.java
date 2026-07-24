@@ -1,6 +1,9 @@
 package com.p99soft.deskflow.entity;
 
 import com.p99soft.deskflow.enums.Priority;
+
+import jakarta.persistence.*;
+import lombok.*;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;

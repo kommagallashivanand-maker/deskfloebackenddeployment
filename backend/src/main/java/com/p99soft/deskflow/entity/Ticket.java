@@ -2,6 +2,9 @@ package com.p99soft.deskflow.entity;
 
 import com.p99soft.deskflow.enums.Priority;
 import com.p99soft.deskflow.enums.Status;
+import jakarta.persistence.*;
+import lombok.*;
+import java.time.LocalDateTime;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -89,6 +92,7 @@ public class Ticket {
 
     @Column(name = "closed_at")
     private LocalDateTime closedAt;
+
 
     @OneToMany(mappedBy = "ticket", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
