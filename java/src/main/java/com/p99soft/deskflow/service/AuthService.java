@@ -2,14 +2,11 @@ package com.p99soft.deskflow.service;
 
 import com.p99soft.deskflow.dto.AuthResponse;
 import com.p99soft.deskflow.dto.LoginRequest;
+import com.p99soft.deskflow.dto.LoginResponse;
 import com.p99soft.deskflow.dto.RegisterRequest;
 
 /**
  * Service layer for authentication-related operations.
- * <p>
- * This interface defines the business logic for user registration and login.
- * JWT token generation will be added here once JWT support is implemented.
- * </p>
  */
 public interface AuthService {
 
@@ -23,11 +20,11 @@ public interface AuthService {
     AuthResponse register(RegisterRequest request);
 
     /**
-     * Authenticates a user using email and password.
+     * Authenticates a user using email and password and returns a signed JWT.
      *
      * @param request login credentials
-     * @return response containing authenticated user information
+     * @return {@link LoginResponse} containing the JWT, token type, and user metadata
      * @throws org.springframework.security.core.AuthenticationException if credentials are invalid
      */
-    AuthResponse login(LoginRequest request);
+    LoginResponse login(LoginRequest request);
 }

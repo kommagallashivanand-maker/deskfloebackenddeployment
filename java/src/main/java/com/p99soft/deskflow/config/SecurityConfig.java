@@ -1,5 +1,6 @@
 package com.p99soft.deskflow.config;
 
+import com.p99soft.deskflow.security.JwtAuthenticationFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -16,21 +17,18 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 /**
- * Spring Security configuration for the DeskFlow application.
- * <p>
- * This configuration:
+ * Spring Security configuration.
+ *
  * <ul>
- *   <li>Uses BCrypt for password hashing</li>
- *   <li>Configures {@link DaoAuthenticationProvider} for database-backed authentication</li>
- *   <li>Permits all endpoints for now (JWT filter will be added later)</li>
- *   <li>Uses stateless sessions (no server-side session storage)</li>
+ *   <li>BCrypt for password hashing</li>
+ *   <li>{@link DaoAuthenticationProvider} for database-backed authentication</li>
+ *   <li>Stateless sessions — no HTTP session created or used</li>
+ *   <li>{@link JwtAuthenticationFilter} validates tokens on every request</li>
+ *   <li>Auth endpoints are publicly accessible; all others require a valid JWT</li>
  * </ul>
- * </p>
- * <p>
- * <strong>Note:</strong> JWT token-based authentication will be configured in a future iteration.
- * </p>
  */
 @Configuration
 @EnableWebSecurity
@@ -38,23 +36,14 @@ import org.springframework.security.web.SecurityFilterChain;
 @RequiredArgsConstructor
 public class SecurityConfig {
 
-    private final UserDetailsService userDetailsService;
+    private final UserDetailsService       userDetailsService;
+    private final JwtAuthenticationFilter  jwtAuthenticationFilter;
 
-    /**
-     * Password encoder bean using BCrypt with strength 10 (default).
-     * <p>
-     * BCrypt automatically includes a salt, making rainbow table attacks infeasible.
-     * </p>
-     */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    /**
-     * Authentication provider that retrieves users from the database and validates
-     * passwords using BCrypt.
-     */
     @Bean
     public AuthenticationProvider authenticationProvider() {
         DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
@@ -62,34 +51,33 @@ public class SecurityConfig {
         return provider;
     }
 
-    /**
-     * Exposes the {@link AuthenticationManager} bean so it can be injected
-     * into services (e.g., for programmatic authentication in the login endpoint).
-     */
     @Bean
     public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
         return config.getAuthenticationManager();
     }
 
-    /**
-     * Security filter chain configuration.
-     * <p>
-     * Currently permits all requests. JWT-based authorization will be added later
-     * by inserting a {@code JwtAuthenticationFilter} before
-     * {@code UsernamePasswordAuthenticationFilter}.
-     * </p>
-     */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .anyRequest().permitAll()
+                        // Public endpoints — no token required
+                        .requestMatchers(
+                                "/api/v1/auth/**",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
+                                "/v3/api-docs/**",
+                                "/actuator/health"
+                        ).permitAll()
+                        // Everything else requires a valid JWT
+                        .anyRequest().authenticated()
                 )
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
-                .authenticationProvider(authenticationProvider());
+                .authenticationProvider(authenticationProvider())
+                // Run JWT filter before Spring's default username/password filter
+                .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

@@ -2,12 +2,14 @@ package com.p99soft.deskflow.service.Impl;
 
 import com.p99soft.deskflow.dto.AuthResponse;
 import com.p99soft.deskflow.dto.LoginRequest;
+import com.p99soft.deskflow.dto.LoginResponse;
 import com.p99soft.deskflow.dto.RegisterRequest;
 import com.p99soft.deskflow.entity.Team;
 import com.p99soft.deskflow.entity.User;
 import com.p99soft.deskflow.exception.ResourceNotFoundException;
 import com.p99soft.deskflow.repository.TeamRepository;
 import com.p99soft.deskflow.repository.UserRepository;
+import com.p99soft.deskflow.security.JwtService;
 import com.p99soft.deskflow.security.UserDetailsImpl;
 import com.p99soft.deskflow.service.AuthService;
 import lombok.RequiredArgsConstructor;
@@ -21,20 +23,31 @@ import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Implementation of {@link AuthService}.
- * <p>
- * Handles user registration with BCrypt password hashing and authentication
- * via Spring Security's {@link AuthenticationManager}.
- * </p>
+ *
+ * <p>Handles:</p>
+ * <ul>
+ *   <li>User registration with BCrypt password hashing</li>
+ *   <li>Authentication via Spring Security's {@link AuthenticationManager}</li>
+ *   <li>JWT generation via {@link JwtService} after successful authentication</li>
+ * </ul>
+ *
+ * <p>JWT generation is intentionally delegated to {@link JwtService} —
+ * this class only orchestrates the authentication flow (SRP).</p>
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AuthServiceImpl implements AuthService {
 
-    private final UserRepository userRepository;
-    private final TeamRepository teamRepository;
-    private final PasswordEncoder passwordEncoder;
+    private final UserRepository       userRepository;
+    private final TeamRepository       teamRepository;
+    private final PasswordEncoder      passwordEncoder;
     private final AuthenticationManager authenticationManager;
+    private final JwtService           jwtService;
+
+    // ------------------------------------------------------------------ //
+    // Register
+    // ------------------------------------------------------------------ //
 
     @Override
     @Transactional
@@ -53,21 +66,19 @@ public class AuthServiceImpl implements AuthService {
                             "Team not found with id: " + request.getTeamId()));
         }
 
-        String hashedPassword = passwordEncoder.encode(request.getPassword());
-
         User user = User.builder()
                 .employeeCode(request.getEmployeeCode())
                 .firstName(request.getFirstName())
                 .lastName(request.getLastName())
                 .email(request.getEmail())
-                .password(hashedPassword)
+                .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole())
                 .status("ACTIVE")
                 .team(team)
                 .build();
 
         User savedUser = userRepository.save(user);
-        log.info("User registered successfully: id={}, email={}, role={}", 
+        log.info("User registered successfully: id={}, email={}, role={}",
                 savedUser.getId(), savedUser.getEmail(), savedUser.getRole());
 
         return AuthResponse.builder()
@@ -79,11 +90,17 @@ public class AuthServiceImpl implements AuthService {
                 .build();
     }
 
+    // ------------------------------------------------------------------ //
+    // Login
+    // ------------------------------------------------------------------ //
+
     @Override
     @Transactional(readOnly = true)
-    public AuthResponse login(LoginRequest request) {
+    public LoginResponse login(LoginRequest request) {
         log.info("Authenticating user: {}", request.getEmail());
 
+        // Delegates credential validation to Spring Security (DaoAuthenticationProvider).
+        // Throws AuthenticationException automatically on bad credentials.
         Authentication authentication = authenticationManager.authenticate(
                 new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
         );
@@ -91,15 +108,18 @@ public class AuthServiceImpl implements AuthService {
         UserDetailsImpl userDetails = (UserDetailsImpl) authentication.getPrincipal();
         User user = userDetails.getUser();
 
-        log.info("User authenticated successfully: id={}, email={}, role={}", 
-                user.getId(), user.getEmail(), user.getRole());
+        // JWT generation is purely the concern of JwtService
+        String token = jwtService.generateToken(user);
 
-        return AuthResponse.builder()
+        log.info("Login successful — JWT issued for userId={}, role={}", user.getId(), user.getRole());
+
+        return LoginResponse.builder()
+                .token(token)
+                .tokenType("Bearer")
                 .userId(user.getId())
                 .email(user.getEmail())
                 .fullName(user.getFirstName() + " " + user.getLastName())
                 .role(user.getRole())
-                .message("Login successful")
                 .build();
     }
 }
