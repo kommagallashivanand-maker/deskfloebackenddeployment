@@ -37,6 +37,9 @@ Thumbs.db
 .env.staging
 .env.production
 
+__pycache__/
+*.pyc
+
 # Private Keys & Certificates
 *.pem
 *.key
