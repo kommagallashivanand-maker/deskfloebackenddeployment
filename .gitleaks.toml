@@ -20,7 +20,7 @@ useDefault = true
 [[rules]]
 id = "env-file-extension"
 description = "Detects .env files that may contain secrets"
-regex = '''(?i)(jwt[_\-]?secret|jwt[_\-]?key)\s*[=:]\s*[\"\']?\S{8,}[\"\']?'''
+regex = '''(?i)(password|secret|key|token|api[_\-]?key)\s*=\s*\S+'''
 path = '''\.env.*'''
 tags = ["env", "secrets"]
 
@@ -36,11 +36,6 @@ description = "Detects database connection strings with credentials"
 regex = '''(postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@'''
 tags = ["database", "credentials"]
 
-[[rules]]
-id = "jwt-secret-assignment"
-description = "Detects JWT secret assignments in code"
-regex = '''(?i)(jwt[_\-]?secret|jwt[_\-]?key)\s*[=:]\s*["']?(?!\$\{)[^"'\s]{8,}["']?'''
-tags = ["jwt", "secrets"]
 
 [[rules]]
 id = "api-key-assignment"
