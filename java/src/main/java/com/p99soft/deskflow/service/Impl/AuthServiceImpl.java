@@ -95,7 +95,6 @@ public class AuthServiceImpl implements AuthService {
     // ------------------------------------------------------------------ //
 
     @Override
-    @Transactional(readOnly = true)
     public LoginResponse login(LoginRequest request) {
         log.info("Authenticating user: {}", request.getEmail());
 

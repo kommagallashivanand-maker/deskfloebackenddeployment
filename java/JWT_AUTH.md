@@ -1,5 +1,8 @@
 # JWT Authentication & Authorization Guide
 
+> 📖 **Interactive API Docs (Swagger UI):** [http://localhost:8080/swagger-ui/index.html](http://localhost:8080/swagger-ui/index.html)
+> 🔗 **OpenAPI Spec (JSON):** [http://localhost:8080/v3/api-docs](http://localhost:8080/v3/api-docs)
+
 This document describes the complete JWT authentication and role-based authorization implementation in the DeskFlow backend.
 
 ---

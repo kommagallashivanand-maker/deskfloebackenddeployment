@@ -1,26 +1,24 @@
 package com.p99soft.deskflow.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.p99soft.deskflow.dto.ApiErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
 
 /**
- * Handles requests where the user is authenticated but does not have
- * the required role to access the resource.
+ * Invoked by Spring Security when an authenticated user attempts to access
+ * a resource they do not have the required role for.
  *
- * <p>Example: an EMPLOYEE or AGENT trying to call {@code POST /api/v1/auth/register}
- * which is restricted to ADMIN only.</p>
+ * <p>Examples:</p>
+ * <ul>
+ *   <li>EMPLOYEE or AGENT calling {@code POST /api/v1/auth/register} (ADMIN only)</li>
+ *   <li>EMPLOYEE calling {@code PUT /api/v1/tickets/{id}} (AGENT/ADMIN only)</li>
+ * </ul>
  *
  * <p>Returns a structured JSON {@code 403 Forbidden} response consistent
  * with the rest of the API's error format ({@link ApiErrorResponse}).</p>
@@ -28,13 +26,8 @@ import java.time.LocalDateTime;
 @Component
 public class JwtAccessDeniedHandler implements AccessDeniedHandler {
 
-    private final ObjectMapper objectMapper;
-
-    public JwtAccessDeniedHandler() {
-        this.objectMapper = new ObjectMapper()
-                .registerModule(new JavaTimeModule())
-                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
-    }
+    private static final String ACCESS_DENIED_MESSAGE =
+            "Access denied: you do not have the required role to perform this action";
 
     @Override
     public void handle(
@@ -42,18 +35,12 @@ public class JwtAccessDeniedHandler implements AccessDeniedHandler {
             HttpServletResponse response,
             AccessDeniedException accessDeniedException
     ) throws IOException {
-
-        response.setStatus(HttpStatus.FORBIDDEN.value());
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-
-        ApiErrorResponse errorResponse = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.FORBIDDEN.value())
-                .error(HttpStatus.FORBIDDEN.getReasonPhrase())
-                .message("Access denied: you do not have permission to perform this action. ADMIN role required.")
-                .details("uri=" + request.getRequestURI())
-                .build();
-
-        objectMapper.writeValue(response.getOutputStream(), errorResponse);
+        ErrorResponseWriter.write(
+                response,
+                HttpStatus.FORBIDDEN.value(),
+                HttpStatus.FORBIDDEN.getReasonPhrase(),
+                ACCESS_DENIED_MESSAGE,
+                request.getRequestURI()
+        );
     }
 }

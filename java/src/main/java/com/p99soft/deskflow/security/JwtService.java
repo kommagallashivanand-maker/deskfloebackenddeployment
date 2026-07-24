@@ -6,7 +6,6 @@ import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Service;
@@ -18,41 +17,45 @@ import java.util.UUID;
 
 /**
  * Stateless service responsible solely for JWT operations:
- * generation, parsing, and validation.
+ * generation, parsing, and validation. No authentication business logic here.
  *
- * <p>This class has no knowledge of authentication business logic —
- * it only works with tokens and claims (Single Responsibility).</p>
- *
- * <p>Token structure (claims):</p>
+ * <h3>Token claims</h3>
  * <ul>
  *   <li>{@code sub}    — user email (standard JWT subject)</li>
- *   <li>{@code userId} — UUID of the user</li>
- *   <li>{@code role}   — user role (EMPLOYEE / AGENT / ADMIN)</li>
+ *   <li>{@code userId} — user UUID</li>
+ *   <li>{@code role}   — EMPLOYEE / AGENT / ADMIN</li>
+ *   <li>{@code iat}    — issued-at timestamp</li>
+ *   <li>{@code exp}    — expiration timestamp</li>
  * </ul>
  */
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class JwtService {
 
     private static final String CLAIM_USER_ID = "userId";
     private static final String CLAIM_ROLE    = "role";
 
-    private final JwtProperties jwtProperties;
+    private final long      expiration;
+    private final SecretKey signingKey;   // computed once at startup — not per-call
+
+    public JwtService(JwtProperties jwtProperties) {
+        this.expiration = jwtProperties.getExpiration();
+        this.signingKey = Keys.hmacShaKeyFor(HexFormat.of().parseHex(jwtProperties.getSecret()));
+    }
 
     // ------------------------------------------------------------------ //
     // Token generation
     // ------------------------------------------------------------------ //
 
     /**
-     * Generates a signed JWT for the given {@link User}.
+     * Builds and signs a JWT for the given authenticated {@link User}.
      *
-     * @param user the authenticated user entity
+     * @param user the authenticated user
      * @return compact, URL-safe JWT string
      */
     public String generateToken(User user) {
         Date now    = new Date();
-        Date expiry = new Date(now.getTime() + jwtProperties.getExpiration());
+        Date expiry = new Date(now.getTime() + expiration);
 
         return Jwts.builder()
                 .subject(user.getEmail())
@@ -60,7 +63,7 @@ public class JwtService {
                 .claim(CLAIM_ROLE, user.getRole().name())
                 .issuedAt(now)
                 .expiration(expiry)
-                .signWith(signingKey())
+                .signWith(signingKey)
                 .compact();
     }
 
@@ -69,7 +72,7 @@ public class JwtService {
     // ------------------------------------------------------------------ //
 
     /**
-     * Returns {@code true} if the token is structurally valid, signed correctly,
+     * Returns {@code true} if the token is well-formed, correctly signed,
      * not expired, and the subject matches the provided {@link UserDetails}.
      */
     public boolean isTokenValid(String token, UserDetails userDetails) {
@@ -86,17 +89,17 @@ public class JwtService {
     // Claim extraction
     // ------------------------------------------------------------------ //
 
-    /** Extracts the {@code sub} (email) claim from the token. */
+    /** Returns the {@code sub} claim (user email). */
     public String extractEmail(String token) {
         return parseClaims(token).getSubject();
     }
 
-    /** Extracts the {@code userId} claim from the token. */
+    /** Returns the {@code userId} claim as a {@link UUID}. */
     public UUID extractUserId(String token) {
         return UUID.fromString(parseClaims(token).get(CLAIM_USER_ID, String.class));
     }
 
-    /** Extracts the {@code role} claim from the token. */
+    /** Returns the {@code role} claim string. */
     public String extractRole(String token) {
         return parseClaims(token).get(CLAIM_ROLE, String.class);
     }
@@ -111,14 +114,9 @@ public class JwtService {
 
     private Claims parseClaims(String token) {
         return Jwts.parser()
-                .verifyWith(signingKey())
+                .verifyWith(signingKey)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();
-    }
-
-    private SecretKey signingKey() {
-        byte[] keyBytes = HexFormat.of().parseHex(jwtProperties.getSecret());
-        return Keys.hmacShaKeyFor(keyBytes);
     }
 }

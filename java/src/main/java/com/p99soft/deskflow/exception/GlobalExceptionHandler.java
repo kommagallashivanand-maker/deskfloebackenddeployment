@@ -1,153 +1,172 @@
 package com.p99soft.deskflow.exception;
 
 import com.p99soft.deskflow.dto.ApiErrorResponse;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.core.AuthenticationException;
+import org.springframework.validation.FieldError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ControllerAdvice;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.WebRequest;
-import java.time.LocalDateTime;
-import java.util.HashMap;
-import java.util.Map;
 
+import jakarta.validation.ConstraintViolationException;
+import java.time.LocalDateTime;
+import java.util.Map;
+import java.util.stream.Collectors;
+
+/**
+ * Centralised exception handler for the entire application.
+ *
+ * <p>All business and framework exceptions are translated here into the
+ * consistent {@link ApiErrorResponse} format. No controller or service
+ * should handle HTTP status mapping — that belongs here.</p>
+ */
 @ControllerAdvice
 public class GlobalExceptionHandler {
 
+    // ------------------------------------------------------------------ //
+    // Domain exceptions
+    // ------------------------------------------------------------------ //
+
     @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ApiErrorResponse> handleResourceNotFoundException(ResourceNotFoundException ex, WebRequest request) {
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.NOT_FOUND.value())
-                .error(HttpStatus.NOT_FOUND.getReasonPhrase())
-                .message(ex.getMessage())
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.NOT_FOUND);
+    public ResponseEntity<ApiErrorResponse> handleNotFound(
+            ResourceNotFoundException ex, WebRequest request) {
+        return build(HttpStatus.NOT_FOUND, ex.getMessage(), request);
     }
 
     @ExceptionHandler(InvalidStatusTransitionException.class)
-    public ResponseEntity<ApiErrorResponse> handleInvalidStatusTransitionException(InvalidStatusTransitionException ex, WebRequest request) {
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
-                .message(ex.getMessage())
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.BAD_REQUEST);
+    public ResponseEntity<ApiErrorResponse> handleInvalidTransition(
+            InvalidStatusTransitionException ex, WebRequest request) {
+        return build(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ApiErrorResponse> handleIllegalArgumentException(IllegalArgumentException ex, WebRequest request) {
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
-                .message(ex.getMessage())
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.BAD_REQUEST);
+    public ResponseEntity<ApiErrorResponse> handleIllegalArgument(
+            IllegalArgumentException ex, WebRequest request) {
+        return build(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
     }
 
-    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiErrorResponse> handleValidationException(org.springframework.web.bind.MethodArgumentNotValidException ex, WebRequest request) {
-        Map<String, String> errors = new HashMap<>();
-        ex.getBindingResult().getFieldErrors().forEach(error -> 
-            errors.put(error.getField(), error.getDefaultMessage())
-        );
+    // ------------------------------------------------------------------ //
+    // Validation exceptions
+    // ------------------------------------------------------------------ //
 
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
-                .message("Validation failed")
-                .details(request.getDescription(false))
-                .errors(errors)
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.BAD_REQUEST);
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiErrorResponse> handleValidation(
+            MethodArgumentNotValidException ex, WebRequest request) {
+
+        Map<String, String> fieldErrors = ex.getBindingResult()
+                .getFieldErrors()
+                .stream()
+                .collect(Collectors.toMap(
+                        FieldError::getField,
+                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value",
+                        (first, second) -> first   // keep first message on duplicate fields
+                ));
+
+        return buildWithErrors(HttpStatus.BAD_REQUEST, "Validation failed", request, fieldErrors);
     }
 
-    @ExceptionHandler(jakarta.validation.ConstraintViolationException.class)
-    public ResponseEntity<ApiErrorResponse> handleConstraintViolation(jakarta.validation.ConstraintViolationException ex, WebRequest request) {
-        Map<String, String> errors = new HashMap<>();
-        ex.getConstraintViolations().forEach(violation -> {
-            String path = violation.getPropertyPath().toString();
-            String field = path.contains(".") ? path.substring(path.lastIndexOf('.') + 1) : path;
-            errors.put(field, violation.getMessage());
-        });
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiErrorResponse> handleConstraintViolation(
+            ConstraintViolationException ex, WebRequest request) {
 
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
-                .message("Validation failed")
-                .details(request.getDescription(false))
-                .errors(errors)
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.BAD_REQUEST);
+        Map<String, String> fieldErrors = ex.getConstraintViolations()
+                .stream()
+                .collect(Collectors.toMap(
+                        v -> {
+                            String path = v.getPropertyPath().toString();
+                            return path.contains(".")
+                                    ? path.substring(path.lastIndexOf('.') + 1)
+                                    : path;
+                        },
+                        v -> v.getMessage(),
+                        (first, second) -> first
+                ));
+
+        return buildWithErrors(HttpStatus.BAD_REQUEST, "Validation failed", request, fieldErrors);
     }
 
-    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
-    public ResponseEntity<ApiErrorResponse> handleDataIntegrityViolationException(org.springframework.dao.DataIntegrityViolationException ex, WebRequest request) {
-        String msg = "Database integrity violation: " + (ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage());
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.CONFLICT.value())
-                .error(HttpStatus.CONFLICT.getReasonPhrase())
-                .message(msg)
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.CONFLICT);
+    // ------------------------------------------------------------------ //
+    // Infrastructure / framework exceptions
+    // ------------------------------------------------------------------ //
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ApiErrorResponse> handleDataIntegrity(
+            DataIntegrityViolationException ex, WebRequest request) {
+        String message = "Data integrity violation: " + (ex.getMostSpecificCause() != null
+                ? ex.getMostSpecificCause().getMessage()
+                : ex.getMessage());
+        return build(HttpStatus.CONFLICT, message, request);
     }
 
-    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
-    public ResponseEntity<ApiErrorResponse> handleHttpMessageNotReadableException(org.springframework.http.converter.HttpMessageNotReadableException ex, WebRequest request) {
-        String msg = "Malformed JSON request or invalid enum value: " + (ex.getMostSpecificCause() != null ? ex.getMostSpecificCause().getMessage() : ex.getMessage());
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.BAD_REQUEST.value())
-                .error(HttpStatus.BAD_REQUEST.getReasonPhrase())
-                .message(msg)
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.BAD_REQUEST);
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiErrorResponse> handleUnreadableMessage(
+            HttpMessageNotReadableException ex, WebRequest request) {
+        String message = "Malformed JSON or invalid enum value: " + (ex.getMostSpecificCause() != null
+                ? ex.getMostSpecificCause().getMessage()
+                : ex.getMessage());
+        return build(HttpStatus.BAD_REQUEST, message, request);
     }
 
-    @ExceptionHandler(org.springframework.security.core.AuthenticationException.class)
-    public ResponseEntity<ApiErrorResponse> handleAuthenticationException(
-            org.springframework.security.core.AuthenticationException ex, WebRequest request) {
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.UNAUTHORIZED.value())
-                .error(HttpStatus.UNAUTHORIZED.getReasonPhrase())
-                .message("Authentication failed: " + ex.getMessage())
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.UNAUTHORIZED);
+    // ------------------------------------------------------------------ //
+    // Security exceptions
+    // ------------------------------------------------------------------ //
+
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ApiErrorResponse> handleAuthentication(
+            AuthenticationException ex, WebRequest request) {
+        return build(HttpStatus.UNAUTHORIZED, "Authentication failed: " + ex.getMessage(), request);
     }
 
-    @ExceptionHandler(org.springframework.security.access.AccessDeniedException.class)
-    public ResponseEntity<ApiErrorResponse> handleAccessDeniedException(
-            org.springframework.security.access.AccessDeniedException ex, WebRequest request) {
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.FORBIDDEN.value())
-                .error(HttpStatus.FORBIDDEN.getReasonPhrase())
-                .message("Access denied: " + ex.getMessage())
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.FORBIDDEN);
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ApiErrorResponse> handleAccessDenied(
+            AccessDeniedException ex, WebRequest request) {
+        return build(HttpStatus.FORBIDDEN, "Access denied: " + ex.getMessage(), request);
     }
+
+    // ------------------------------------------------------------------ //
+    // Catch-all
+    // ------------------------------------------------------------------ //
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<ApiErrorResponse> handleGlobalException(Exception ex, WebRequest request) {
-        ApiErrorResponse body = ApiErrorResponse.builder()
-                .timestamp(LocalDateTime.now())
-                .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .error(HttpStatus.INTERNAL_SERVER_ERROR.getReasonPhrase())
-                .message("An unexpected error occurred: " + ex.getMessage())
-                .details(request.getDescription(false))
-                .build();
-        return new ResponseEntity<>(body, HttpStatus.INTERNAL_SERVER_ERROR);
+    public ResponseEntity<ApiErrorResponse> handleGeneral(
+            Exception ex, WebRequest request) {
+        return build(HttpStatus.INTERNAL_SERVER_ERROR,
+                "An unexpected error occurred: " + ex.getMessage(), request);
+    }
+
+    // ------------------------------------------------------------------ //
+    // Helpers
+    // ------------------------------------------------------------------ //
+
+    private ResponseEntity<ApiErrorResponse> build(
+            HttpStatus status, String message, WebRequest request) {
+        return ResponseEntity.status(status).body(
+                ApiErrorResponse.builder()
+                        .timestamp(LocalDateTime.now())
+                        .status(status.value())
+                        .error(status.getReasonPhrase())
+                        .message(message)
+                        .details(request.getDescription(false))
+                        .build()
+        );
+    }
+
+    private ResponseEntity<ApiErrorResponse> buildWithErrors(
+            HttpStatus status, String message, WebRequest request, Map<String, String> errors) {
+        return ResponseEntity.status(status).body(
+                ApiErrorResponse.builder()
+                        .timestamp(LocalDateTime.now())
+                        .status(status.value())
+                        .error(status.getReasonPhrase())
+                        .message(message)
+                        .details(request.getDescription(false))
+                        .errors(errors)
+                        .build()
+        );
     }
 }

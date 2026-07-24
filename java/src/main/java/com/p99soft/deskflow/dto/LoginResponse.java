@@ -18,8 +18,7 @@ import java.util.UUID;
 @Schema(description = "Response payload for a successful login — contains the JWT and user metadata")
 public class LoginResponse {
 
-    @Schema(description = "Signed JWT to be sent in the Authorization header on subsequent requests",
-            example = "eyJhbGciOiJIUzI1NiJ9...")
+    @Schema(description = "Signed JWT to be sent in the Authorization header on subsequent requests")
     private String token;
 
     @Schema(description = "Token type — always Bearer", example = "Bearer")

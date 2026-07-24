@@ -6,19 +6,22 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.io.Serial;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
 
 /**
  * Spring Security {@link UserDetails} adapter for the {@link User} domain entity.
- * <p>
- * Wraps the persisted {@code User} and exposes only what Spring Security needs,
- * keeping the domain entity free of framework concerns.
- * </p>
+ *
+ * <p>Wraps the persisted {@code User} and exposes only what Spring Security needs,
+ * keeping the domain entity free of framework concerns (Adapter pattern).</p>
  */
 @RequiredArgsConstructor
 public class UserDetailsImpl implements UserDetails {
+
+    @Serial
+    private static final long serialVersionUID = 1L;
 
     private final User user;
 
