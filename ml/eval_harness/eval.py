@@ -31,18 +31,21 @@ def check_thresholds(aggregate_metrics: dict) -> bool:
     Validates metrics against CI quality thresholds.
     
     Thresholds are set at ~15% below the baseline real-model performance observed
-    on 2026-07-23 (git commit a5cd9c9) to allow for normal variance while catching
+    on 2026-07-24 (git commit a698b74) to allow for normal variance while catching
     genuine regressions.
     
-    Baseline numbers from real eval run:
-    - category_baseline:    macro-F1 = 0.9209
-    - category_embeddings:  macro-F1 = 0.8163
-    - priority_model:       macro-Precision = 0.5232, macro-Recall = 0.6694
+    Baseline numbers from real eval run with corrected feature extraction:
+    - category_baseline:    macro-F1 = 0.9209 (2026-07-23, unchanged)
+    - category_embeddings:  macro-F1 = 0.8163 (2026-07-23, unchanged)
+    - priority_model:       macro-Precision = 0.4846, macro-Recall = 0.6428 (2026-07-24, corrected)
+    
+    Note: priority_model baseline was corrected after fixing priority_model.py to use
+    the REAL DF-026 feature extraction pipeline instead of simplified inline extraction.
     
     CI Thresholds (15% below baseline):
     - category_baseline:    macro-F1 >= 0.78
     - category_embeddings:  macro-F1 >= 0.69
-    - priority_model:       macro-Precision >= 0.44, macro-Recall >= 0.57
+    - priority_model:       macro-Precision >= 0.41, macro-Recall >= 0.55
     
     Args:
         aggregate_metrics: The calculated aggregate metrics dict.
@@ -77,8 +80,8 @@ def check_thresholds(aggregate_metrics: dict) -> bool:
     # Define thresholds (15% below baseline)
     THRESHOLD_BASELINE_F1 = 0.78
     THRESHOLD_EMBEDDINGS_F1 = 0.69
-    THRESHOLD_PRIORITY_PRECISION = 0.44
-    THRESHOLD_PRIORITY_RECALL = 0.57
+    THRESHOLD_PRIORITY_PRECISION = 0.41  # 15% below 0.4846 (corrected after DF-026 integration)
+    THRESHOLD_PRIORITY_RECALL = 0.55     # 15% below 0.6428 (corrected after DF-026 integration)
     
     # Check thresholds
     passed = True
