@@ -7,3 +7,10 @@ scikit-learn
 pandas
 numpy
 sentence-transformers
+
+# Priority feature extraction dependencies (DF-026)
+pydantic
+pydantic-settings
+vaderSentiment
+yake
+spacy

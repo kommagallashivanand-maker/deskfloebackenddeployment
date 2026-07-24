@@ -42,15 +42,17 @@ This script runs all three real models on the golden test set, computes precisio
 
 The evaluation harness enforces minimum quality thresholds to catch model regressions. These thresholds are set at ~15% below the baseline real-model performance to allow for normal variance while catching genuine regressions.
 
-**Baseline Numbers** (observed 2026-07-23, git commit a5cd9c9):
-- **category_baseline** (TF-IDF + LogisticRegression): macro-F1 = 0.9209
-- **category_embeddings** (SentenceTransformers + LogisticRegression): macro-F1 = 0.8163  
-- **priority_model** (RandomForest + extracted features): macro-Precision = 0.5232, macro-Recall = 0.6694
+**Baseline Numbers**:
+- **category_baseline** (TF-IDF + LogisticRegression): macro-F1 = 0.9209 (2026-07-23)
+- **category_embeddings** (SentenceTransformers + LogisticRegression): macro-F1 = 0.8163 (2026-07-23)
+- **priority_model** (RandomForest + REAL DF-026 feature extraction): macro-Precision = 0.4846, macro-Recall = 0.6428 (2026-07-24, corrected)
+
+**Note**: The priority_model baseline was corrected on 2026-07-24 after fixing `priority_model.py` to use the REAL DF-026 feature extraction pipeline (YAKE keywords + VADER sentiment) instead of simplified inline extraction. This ensures eval metrics match production behavior where the model receives features from the actual feature extraction service.
 
 **CI Thresholds** (15% below baseline):
 - **category_baseline**: macro-F1 >= 0.78
 - **category_embeddings**: macro-F1 >= 0.69
-- **priority_model**: macro-Precision >= 0.44, macro-Recall >= 0.57
+- **priority_model**: macro-Precision >= 0.41, macro-Recall >= 0.55
 
 If any model falls below its threshold, `eval.py` exits with code 1 and prints a clear failure message identifying which model/metric failed.
 

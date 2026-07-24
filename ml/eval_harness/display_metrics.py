@@ -53,8 +53,11 @@ threshold_embed = macro_f1_embed * 0.85
 threshold_priority_prec = macro_prec * 0.85
 threshold_priority_rec = macro_rec * 0.85
 
-print(f"\ncategory_baseline:    macro-F1 >= {threshold_baseline:.4f}")
-print(f"category_embeddings:  macro-F1 >= {threshold_embed:.4f}")
-print(f"priority_model:       macro-Precision >= {threshold_priority_prec:.4f}")
-print(f"priority_model:       macro-Recall    >= {threshold_priority_rec:.4f}")
+print(f"\ncategory_baseline:    macro-F1 >= {threshold_baseline:.2f}")
+print(f"category_embeddings:  macro-F1 >= {threshold_embed:.2f}")
+print(f"priority_model:       macro-Precision >= {threshold_priority_prec:.2f}")
+print(f"priority_model:       macro-Recall    >= {threshold_priority_rec:.2f}")
+print()
+print("Note: priority_model baseline corrected 2026-07-24 after")
+print("      fixing feature extraction to use REAL DF-026 pipeline.")
 print()

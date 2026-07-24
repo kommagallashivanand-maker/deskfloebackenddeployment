@@ -4,16 +4,26 @@ Category Baseline Classifier (DF-022)
 Real inference using the trained TF-IDF + Logistic Regression pipeline.
 """
 
-import os
 import sys
 from pathlib import Path
+
+# Add repo root to path FIRST, before any ml.common imports
+_repo_root = Path(__file__).resolve().parent.parent.parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
 import joblib
 import pandas as pd
 
-# Resolve paths relative to this file
-_current_dir = Path(__file__).resolve().parent.parent.parent
-_model_path = _current_dir / "baseline_classifier" / "models" / "baseline_v1.pkl"
-_baseline_dir = _current_dir / "baseline_classifier"
+# Use centralized path resolution (Docker-safe via DESKFLOW_REPO_ROOT env var)
+from ml.common.paths import (
+    get_baseline_classifier_model_path,
+    get_baseline_classifier_dir,
+)
+
+# Resolve paths using centralized module
+_model_path = get_baseline_classifier_model_path()
+_baseline_dir = get_baseline_classifier_dir()
 
 # Add baseline_classifier to path so pickle can find its utils module
 if str(_baseline_dir) not in sys.path:

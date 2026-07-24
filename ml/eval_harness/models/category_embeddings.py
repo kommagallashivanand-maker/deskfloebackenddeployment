@@ -4,17 +4,27 @@ Category Embeddings Classifier (DF-023)
 Real inference using sentence embeddings + Logistic Regression.
 """
 
-import os
 import sys
 from pathlib import Path
+
+# Add repo root to path FIRST, before any ml.common imports
+_repo_root = Path(__file__).resolve().parent.parent.parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
 import joblib
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 
-# Resolve paths relative to this file
-_current_dir = Path(__file__).resolve().parent.parent.parent
-_model_path = _current_dir / "embedding_classifier" / "models" / "embedding_v1.pkl"
-_embedding_dir = _current_dir / "embedding_classifier"
+# Use centralized path resolution (Docker-safe via DESKFLOW_REPO_ROOT env var)
+from ml.common.paths import (
+    get_embedding_classifier_model_path,
+    get_embedding_classifier_dir,
+)
+
+# Resolve paths using centralized module
+_model_path = get_embedding_classifier_model_path()
+_embedding_dir = get_embedding_classifier_dir()
 
 # Add embedding_classifier to path so pickle can find its utils module
 if str(_embedding_dir) not in sys.path:

@@ -156,13 +156,17 @@ Evaluation completed successfully.
   - Technical: 0.5714
 
 **priority_model** (RandomForest + extracted features):
-- **Macro-Precision**: 0.5232
-- **Macro-Recall**: 0.6694
+- **Macro-Precision**: 0.5232 ❌ **INCORRECT** (measured with simplified inline feature extraction)
+- **Macro-Recall**: 0.6694 ❌ **INCORRECT**
+
+**CORRECTED baseline (2026-07-24)** after fixing feature extraction to use REAL DF-026 pipeline:
+- **Macro-Precision**: 0.4846 ✓ **CORRECT** (measured with YAKE+spaCy keywords, VADER sentiment)
+- **Macro-Recall**: 0.6428 ✓ **CORRECT**
 - Per-class precision/recall:
-  - Urgent: Precision=0.5000, Recall=1.0000
-  - High: Precision=0.2105, Recall=0.6667
-  - Medium: Precision=0.5000, Recall=0.2609
-  - Low: Precision=0.8824, Recall=0.7500
+  - Urgent: Precision=0.2000, Recall=1.0000
+  - High: Precision=0.2000, Recall=0.6667
+  - Medium: Precision=0.5385, Recall=0.3043
+  - Low: Precision=1.0000, Recall=0.6000
 
 ## Task 3: CI Thresholds
 
@@ -173,16 +177,18 @@ Thresholds are set at **15% below baseline performance** to:
 2. Catch genuine regressions (e.g., broken model loading, feature extraction bugs)
 3. Avoid false-positive CI failures from minor fluctuations
 
-### Implemented Thresholds
+### Implemented Thresholds (Corrected 2026-07-24)
 
 ```python
 # In ml/eval_harness/eval.py check_thresholds()
 
-THRESHOLD_BASELINE_F1 = 0.78          # 15% below 0.9209
-THRESHOLD_EMBEDDINGS_F1 = 0.69        # 15% below 0.8163
-THRESHOLD_PRIORITY_PRECISION = 0.44   # 15% below 0.5232
-THRESHOLD_PRIORITY_RECALL = 0.57      # 15% below 0.6694
+THRESHOLD_BASELINE_F1 = 0.78          # 15% below 0.9209 (unchanged)
+THRESHOLD_EMBEDDINGS_F1 = 0.69        # 15% below 0.8163 (unchanged)
+THRESHOLD_PRIORITY_PRECISION = 0.41   # 15% below 0.4846 (CORRECTED from 0.44)
+THRESHOLD_PRIORITY_RECALL = 0.55      # 15% below 0.6428 (CORRECTED from 0.57)
 ```
+
+**Threshold Correction**: The priority_model thresholds were revised after fixing `priority_model.py` to use the REAL DF-026 feature extraction pipeline instead of simplified inline extraction. The original baseline (Precision=0.5232, Recall=0.6694) was measured with incorrect features that didn't match training. The corrected baseline (Precision=0.4846, Recall=0.6428) reflects actual production behavior with proper YAKE+spaCy keywords and VADER sentiment analysis.
 
 ### Failure Behavior
 
