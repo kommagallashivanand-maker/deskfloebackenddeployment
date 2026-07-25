@@ -167,13 +167,76 @@ jobs:
           retention-days: 30
 
   # ══════════════════════════════════════════════════════════════════════════════
-  # JOB 2: BUILD AND PUSH DOCKER IMAGES
+  # JOB 2: TRIVY FILESYSTEM VULNERABILITY SCAN
+  # Purpose: Scans the repository filesystem for vulnerable dependencies,
+  #          OS packages, and misconfigurations BEFORE any Docker image is built.
+  #          Uses the official aquasecurity/trivy-action.
+  #          Exits with code 1 only on HIGH or CRITICAL findings (LOW/MEDIUM
+  #          are reported but do not block the pipeline).
+  #          Generates both a SARIF report (for GitHub Security tab) and a
+  #          human-readable table report, both uploaded as downloadable artifacts.
+  # Runs:    In parallel with SAST — build-and-push waits for BOTH to pass.
+  # ══════════════════════════════════════════════════════════════════════════════
+  trivy-scan:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      # Full checkout required so Trivy can walk the entire project tree
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── SARIF report ──────────────────────────────────────────────────────
+      # Produces a machine-readable SARIF file.
+      # exit-code: 0 here so this step never fails on its own — the
+      # human-readable step below is the one that enforces the gate.
+      - name: Run Trivy — SARIF report
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: sarif
+          output: trivy-reports/trivy-report.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: false
+
+      # ── Human-readable table report ───────────────────────────────────────
+      # Runs a second pass to produce a readable table in the Actions log AND
+      # write it to a file for the artifact.  exit-code: 1 makes THIS step
+      # fail (and therefore the job) when HIGH/CRITICAL vulnerabilities exist.
+      - name: Run Trivy — table report (pipeline gate)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          output: trivy-reports/trivy-report.txt
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: false
+
+      # Upload both reports — if: always() ensures the artifact is available
+      # even when the gate step above fails, so the team can inspect findings.
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: |
+            trivy-reports/trivy-report.sarif
+            trivy-reports/trivy-report.txt
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 3: BUILD AND PUSH DOCKER IMAGES
   # ══════════════════════════════════════════════════════════════════════════════
   build-and-push:
     name: Build and Push Docker Images
-    # Gate: only run if SAST passed — no point building a vulnerable image
-    needs: sast
-    if: needs.sast.result == 'success'
+    # Gate: both SAST and Trivy must pass before any image is built or pushed.
+    # Running them in parallel (neither depends on the other) keeps the pipeline
+    # fast while still enforcing both security checks.
+    needs: [sast, trivy-scan]
+    if: needs.sast.result == 'success' && needs.trivy-scan.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
