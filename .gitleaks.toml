@@ -1,0 +1,86 @@
+title = "DeskFlow Security Configuration"
+# this file is not working in local machine to setup gitleaks due to security policy of windows os
+# ============================================================================
+# Gitleaks Configuration
+# ============================================================================
+# Gitleaks is used for detecting hardcoded secrets in source code.
+# Documentation: https://github.com/gitleaks/gitleaks
+#
+# This config extends the default ruleset and adds project-specific rules.
+# ============================================================================
+
+# Extend the default Gitleaks ruleset (includes 100+ common secret patterns)
+[extend]
+useDefault = true
+
+# ============================================================================
+# Project-Specific Custom Rules
+# ============================================================================
+
+[[rules]]
+id = "env-file-extension"
+description = "Detects .env files that may contain secrets"
+regex = '''(?i)(password|secret|key|token|api[_\-]?key)\s*=\s*\S+'''
+path = '''\.env.*'''
+tags = ["env", "secrets"]
+
+[[rules]]
+id = "private-key-header"
+description = "Detects private key headers in any file"
+regex = '''-----BEGIN.*(PRIVATE KEY|CERTIFICATE)-----'''
+tags = ["keys", "certificates"]
+
+[[rules]]
+id = "database-connection-string"
+description = "Detects database connection strings with credentials"
+regex = '''(postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@'''
+tags = ["database", "credentials"]
+
+
+[[rules]]
+id = "api-key-assignment"
+description = "Detects API key assignments in code"
+regex = '''(?i)(api[_\-]?key|access[_\-]?key)\s*[=:]\s*[\"\']?\w{16,}[\"\']?'''
+tags = ["api", "keys"]
+
+# ============================================================================
+# Allowlist — Files and paths that should NOT be scanned
+# ============================================================================
+
+[allowlist]
+description = "Allowlist for known safe files to reduce false positives"
+
+# Explicitly safe files
+paths = [
+  # Example config files (no real values)
+  '''\.env\.example$''',
+
+  # Documentation files
+  '''README\.md$''',
+  '''SECURITY\.md$''',
+  '''TEST-SECURITY\.md$''',
+  '''docs/.*\.md$''',
+
+  # Test fixtures (if any)
+  '''test/.*fixtures.*''',
+  '''tests/.*fixtures.*''',
+  '''__tests__/.*fixtures.*''',
+
+  # Lock files (no secrets)
+  '''package-lock\.json$''',
+  '''yarn\.lock$''',
+  '''pnpm-lock\.yaml$''',
+
+  # Git internal files
+  '''\.git/.*''',
+]
+
+# Regex patterns that are known to be false positives in this project
+regexes = [
+  '''your[-_]?api[-_]?key[-_]?here''',
+  '''example[-_]?token''',
+  '''<your[-_]?.*[-_]?here>''',
+  '''INSERT[-_]?YOUR[-_]?.*[-_]?HERE''',
+
+  '''JWT_SECRET:\s*\$\{JWT_SECRET\}''',
+]

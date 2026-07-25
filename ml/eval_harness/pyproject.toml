@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eval_harness"
+version = "0.1.0"
+description = "Evaluation harness for DeskFlow model predictions"
+dependencies = [
+    "pytest",
+    "pytest-cov",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

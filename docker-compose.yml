@@ -1,0 +1,187 @@
+name: deskflow
+
+# =============================================================================
+# DeskFlow - Production Docker Compose
+#
+# Services:
+#   1. postgres                    - PostgreSQL 16 database
+#   2. backend                     - Spring Boot REST API (port 8080)
+#   3. ml-service                  - FastAPI ML base service (port 8003)
+#   4. priority-feature-extraction - FastAPI ML feature extractor (port 8002)
+#
+# Usage:
+#   docker compose up -d           # start all services
+#   docker compose logs -f         # follow all logs
+#   docker compose down            # stop all services
+#   docker compose down -v         # stop and wipe database volume
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL Database
+  # ---------------------------------------------------------------------------
+  postgres:
+    container_name: deskflow-postgres
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: deskflow
+      POSTGRES_USER: ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d deskflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - deskflow-backend-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
+    # Postgres is internal only — no ports exposed to host
+    expose:
+      - "5432"
+
+  # ---------------------------------------------------------------------------
+  # Spring Boot Backend
+  # ---------------------------------------------------------------------------
+  backend:
+    container_name: deskflow-backend
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    image: deskflow/backend:1.0.0
+    restart: unless-stopped
+    environment:
+      # Database — uses service name 'postgres' as host (internal DNS)
+      DB_URL: jdbc:postgresql://postgres:5432/deskflow
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      # JWT
+      JWT_SECRET: ${JWT_SECRET}
+      # AWS S3
+      AWS_S3_BUCKET: ${AWS_S3_BUCKET:-deskflow-attachments}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      # JVM tuning
+      JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - deskflow-backend-network
+    mem_limit: 768m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # ML Service (Base FastAPI Service)
+  # ---------------------------------------------------------------------------
+  ml-service:
+    container_name: deskflow-ml-service
+    build:
+      context: .
+      dockerfile: Dockerfile.ml-service
+    image: deskflow/ml-service:1.0.0
+    restart: unless-stopped
+    environment:
+      SERVICE_NAME: "DeskFlow ML Service"
+      SERVICE_VERSION: "1.0.0"
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Internal only — backend calls ml-service:8000 via Docker network
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - deskflow-backend-network
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # ---------------------------------------------------------------------------
+  # Priority Feature Extraction Service
+  # ---------------------------------------------------------------------------
+  priority-feature-extraction:
+    container_name: deskflow-priority-feature-extraction
+    build:
+      context: .
+      dockerfile: Dockerfile.priority-feature-extraction
+    image: deskflow/priority-feature-extraction:1.0.0
+    restart: unless-stopped
+    environment:
+      APP_NAME: "priority_feature_extractor"
+      YAKE_TOP: "6"
+      YAKE_NGRAM_MAX: "2"
+      SENTIMENT_NEGATIVE_THRESH: "-0.1"
+      SENTIMENT_POSITIVE_THRESH: "0.25"
+      CATEGORY_MAPPING_PATH: "sample_data/category_mapping.json"
+      USE_CATEGORY_MAPPING: "False"
+      DOMAIN_ACRONYMS_PATH: "sample_data/domain_acronyms.json"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    # Internal only — backend calls priority-feature-extraction:8001 via Docker network
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - deskflow-backend-network
+    mem_limit: 1g
+    cpus: 2.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  deskflow-backend-network:
+    name: deskflow-backend-network
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/16
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres-data:
+    name: deskflow-postgres-data

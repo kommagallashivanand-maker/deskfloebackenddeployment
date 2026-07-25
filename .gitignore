@@ -1,36 +1,75 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual Environments
-.venv/
-venv/
-env/
-
-# Environment files
-.env
-.env.*
-
-# IDE
-.vscode/
+# IntelliJ IDEA configurations
 .idea/
+*.iws
+*.iml
+*.ipr
+out/
+java/*.xml
+!java/pom.xml
+java/out/
 
-# pytest
-.pytest_cache/
+# Maven build directory
+target/
+**/target/
 
-# Coverage
-.coverage
-htmlcov/
+# Compiled class files
+*.class
 
-# Dummy/sample data
-data/
+# Log files
+*.log
 
-# Build
-build/
-dist/
-*.egg-info/
+# Local persistent data
+bi/metabase-data/
+bi/postgres-data/
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
+# Environment Files
+.env
+.env.*
+!.env.example
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.staging
+.env.production
+
+__pycache__/
+*.pyc
+
+# Private Keys & Certificates
+*.pem
+*.key
+*.ppk
+*.p12
+*.pfx
+*.keystore
+*.jks
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+
+# Credentials & Secrets
+credentials.json
+service-account*.json
+*-serviceaccount.json
+secrets.yml
+secrets.json
+secrets.properties
+
+# AWS Credentials
+.aws/credentials
+.aws/config
+
+# API Keys & Tokens
+.apikey
+.token
+*.token
+
+# SSH & Security
+*.ovpn
+apikey.json

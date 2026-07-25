@@ -1,0 +1,262 @@
+"""
+train.py — Priority Model Training Pipeline
+============================================
+Trains a RandomForestClassifier to predict support ticket priority
+(Low / Medium / High / Urgent) using extracted features from
+tickets_extracted_features.csv located at the repository root.
+
+Usage (from repo root):
+    ml/train_priority_model/.venv/Scripts/python ml/train_priority_model/train.py
+
+Outputs:
+    ml/train_priority_model/models/priority_model_v1.0.0.joblib
+    ml/train_priority_model/models/priority_model_latest.joblib
+"""
+
+import os
+import sys
+import shutil
+import pathlib
+
+import joblib
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics import classification_report
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+# Use centralized path resolution (Docker-safe)
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from ml.common.paths import get_repo_root, get_training_data_path
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+MODEL_VERSION = "v1.1.0"
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
+REPO_ROOT = get_repo_root()
+DATA_PATH = get_training_data_path()
+MODELS_DIR = SCRIPT_DIR / "models"
+
+# Feature column groups
+TEXT_FEATURES = ["keywords"]
+CATEGORICAL_FEATURES_FIXED = ["category", "sentiment_label"]
+# requester_role is populated from the live JWT at request time. In synthetic/
+# early training data it may be constant (e.g. "unknown") since there's no
+# real authenticated session behind these tickets. Rather than hardcoding its
+# exclusion, it's treated as a candidate and only included if it actually
+# varies in the current data — see detect_active_categorical_features().
+CATEGORICAL_FEATURES_CANDIDATE = ["requester_role"]
+NUMERICAL_FEATURES = ["sentiment_score", "description_length"]
+TARGET = "priority"
+ID_COLUMN = "ticket_id"
+
+# Priority label ordering for consistent reporting
+PRIORITY_ORDER = ["Low", "Medium", "High", "Urgent"]
+
+N_FOLDS = 5
+RANDOM_STATE = 42
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def load_data(path: pathlib.Path) -> pd.DataFrame:
+    """Load the feature CSV and perform basic validation."""
+    print(f"[INFO] Loading data from: {path}")
+    if not path.exists():
+        print(f"[ERROR] Data file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+
+    df = pd.read_csv(path)
+    # Only the fixed features are strictly required. Candidate features
+    # (like requester_role) are optional — their presence/variation is
+    # checked dynamically below.
+    required_cols = [ID_COLUMN, TARGET] + TEXT_FEATURES + CATEGORICAL_FEATURES_FIXED + NUMERICAL_FEATURES
+    missing = set(required_cols) - set(df.columns)
+    if missing:
+        print(f"[ERROR] Missing columns in CSV: {missing}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"[INFO] Loaded {len(df):,} rows × {len(df.columns)} columns")
+    return df
+
+
+def summarise_target(series: pd.Series) -> None:
+    """Print class distribution of the target variable."""
+    counts = series.value_counts()
+    total = len(series)
+    print("\n[INFO] Target class distribution:")
+    for label in PRIORITY_ORDER:
+        n = counts.get(label, 0)
+        pct = n / total * 100
+        print(f"       {label:<8} {n:>5}  ({pct:5.1f}%)")
+    print()
+
+
+def detect_active_categorical_features(df: pd.DataFrame) -> list:
+    """Return the full categorical feature list, dynamically including any
+    candidate feature (e.g. requester_role) only if it actually has more
+    than one unique value in this training run.
+
+    requester_role is populated from the live JWT at request time and may
+    be constant (e.g. 'unknown') in synthetic/early training data where no
+    real authenticated session exists. Rather than hardcoding its exclusion,
+    this check re-evaluates it on every run, so it activates automatically
+    once real per-ticket role values exist in the data — no code change
+    needed at that point.
+    """
+    active = list(CATEGORICAL_FEATURES_FIXED)
+    for col in CATEGORICAL_FEATURES_CANDIDATE:
+        if col not in df.columns:
+            print(f"[INFO] '{col}' not present in data, skipping.")
+            continue
+        n_unique = df[col].nunique(dropna=False)
+        if n_unique > 1:
+            print(f"[INFO] '{col}' has {n_unique} unique values — including as a feature.")
+            active.append(col)
+        else:
+            only_value = df[col].iloc[0]
+            print(f"[INFO] '{col}' is constant ('{only_value}') across all rows — excluding this run.")
+    return active
+
+
+def build_preprocessor(categorical_features: list) -> ColumnTransformer:
+    """Construct the column-wise preprocessing pipeline."""
+    text_transformer = TfidfVectorizer(
+        analyzer="word",
+        token_pattern=r"[^,]+",   # comma-separated keyword tokens
+        strip_accents="unicode",
+        lowercase=True,
+        max_features=500,
+    )
+    categorical_transformer = OneHotEncoder(
+        handle_unknown="ignore",
+        sparse_output=False,
+    )
+    numerical_transformer = StandardScaler()
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("tfidf_keywords",  text_transformer,          "keywords"),
+            ("ohe_categoricals", categorical_transformer,  categorical_features),
+            ("scaler_numericals", numerical_transformer,   NUMERICAL_FEATURES),
+        ],
+        remainder="drop",   # silently drops ticket_id, priority, and any unused candidate columns
+    )
+    return preprocessor
+
+
+def build_pipeline(categorical_features: list) -> Pipeline:
+    """Assemble the full preprocessing + classifier pipeline."""
+    preprocessor = build_preprocessor(categorical_features)
+    
+    # Custom class weights to address Medium→High misclassification pattern
+    # Error analysis (DF-028) showed High is over-predicted (precision=0.20, 16 FPs),
+    # while Medium is under-predicted (recall=0.30, only 7/23 caught).
+    # Strategy: Reduce High's weight to penalize false positives, while keeping
+    # Medium's weight elevated to encourage correct Medium predictions.
+    class_weight = {
+        "Low": 1.0,      # Well-performing class (precision=1.0, recall=0.6)
+        "Medium": 2.5,   # Increase weight to improve recall (currently 0.30)
+        "High": 0.7,     # Decrease weight to reduce false positives (currently 16 FPs)
+        "Urgent": 1.5,   # Keep elevated for rare but critical class
+    }
+    
+    classifier = RandomForestClassifier(
+        n_estimators=300,
+        class_weight=class_weight,  # Changed from "balanced" to custom weights
+        max_features="sqrt",
+        random_state=RANDOM_STATE,
+        n_jobs=-1,
+    )
+    pipeline = Pipeline(
+        steps=[
+            ("preprocessor", preprocessor),
+            ("classifier", classifier),
+        ]
+    )
+    return pipeline
+
+
+def run_cross_validation(pipeline: Pipeline, X: pd.DataFrame, y: pd.Series) -> None:
+    """Run stratified k-fold CV and print per-class classification report."""
+    print(f"[INFO] Running Stratified {N_FOLDS}-Fold Cross-Validation ...")
+    cv = StratifiedKFold(n_splits=N_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+
+    y_pred_cv = cross_val_predict(pipeline, X, y, cv=cv, n_jobs=-1)
+
+    print("\n" + "=" * 62)
+    print("  Cross-Validation Classification Report  (averaged over folds)")
+    print("=" * 62)
+    report = classification_report(
+        y,
+        y_pred_cv,
+        labels=PRIORITY_ORDER,
+        zero_division=0,
+    )
+    print(report)
+
+
+def save_artifacts(pipeline: Pipeline) -> None:
+    """Persist the trained pipeline to versioned and 'latest' files."""
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
+    versioned_path = MODELS_DIR / f"priority_model_{MODEL_VERSION}.joblib"
+    latest_path    = MODELS_DIR / "priority_model_latest.joblib"
+
+    joblib.dump(pipeline, versioned_path)
+    shutil.copy2(versioned_path, latest_path)
+
+    print(f"\n[SUCCESS] Model saved:")
+    print(f"          Versioned -> {versioned_path}")
+    print(f"          Latest    -> {latest_path}")
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def main() -> None:
+    print("=" * 62)
+    print("  DeskFlow AI — Priority Model Training Pipeline")
+    print("=" * 62)
+
+    # 1. Load data
+    df = load_data(DATA_PATH)
+    summarise_target(df[TARGET])
+
+    # 2. Determine which categorical features actually have signal this run
+    active_categorical = detect_active_categorical_features(df)
+    print(f"\n[INFO] Active categorical features this run: {active_categorical}\n")
+
+    # 3. Separate features and target
+    feature_cols = TEXT_FEATURES + active_categorical + NUMERICAL_FEATURES
+    X = df[feature_cols]
+    y = df[TARGET]
+
+    # 4. Build pipeline
+    pipeline = build_pipeline(active_categorical)
+
+    # 5. Stratified cross-validation (evaluation only — does not fit the final model)
+    run_cross_validation(pipeline, X, y)
+
+    # 6. Final training on full dataset
+    print("[INFO] Training final model on full dataset ...")
+    pipeline.fit(X, y)
+    print("[INFO] Training complete.")
+
+    # 7. Save versioned + latest artifacts
+    save_artifacts(pipeline)
+
+    print("\n[DONE] All steps completed successfully.\n")
+
+
+if __name__ == "__main__":
+    main()

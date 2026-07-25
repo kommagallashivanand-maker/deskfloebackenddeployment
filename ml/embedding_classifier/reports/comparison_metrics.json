@@ -1,0 +1,17 @@
+{
+    "test_set_size": 400,
+    "baseline": {
+        "model_version": "baseline_v1",
+        "accuracy": 0.7686567164179104,
+        "macro_f1": 0.7635699273026505,
+        "weighted_f1": 0.7641539196093655
+    },
+    "embedding": {
+        "model_version": "embedding_v1",
+        "accuracy": 0.7761194029850746,
+        "macro_f1": 0.7719828711138372,
+        "weighted_f1": 0.7725412974337588
+    },
+    "macro_f1_delta": 0.008412943811186735,
+    "winner": "Embedding Classifier"
+}
