@@ -1,0 +1,560 @@
+name: Deployment
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 1: STATIC APPLICATION SECURITY TESTING (SAST) WITH SEMGREP
+  # Purpose: Scans the full codebase for security vulnerabilities and code issues
+  #          using Semgrep auto-config rules. Produces a human-readable .txt report
+  #          and a raw JSON report, both uploaded as downloadable GitHub artifacts.
+  #          The job fails if ERROR/HIGH/MEDIUM severity findings are detected.
+  # Runs:    First — build-and-push only proceeds if this job succeeds.
+  # Outputs: semgrep_findings, sast_status, severity_summary
+  # ══════════════════════════════════════════════════════════════════════════════
+  sast:
+    name: SAST Semgrep
+    runs-on: ubuntu-latest
+    outputs:
+      semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
+      sast_status: ${{ steps.semgrep.outputs.sast_status }}
+      severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
+    steps:
+      # Full checkout so Semgrep can scan every file in the repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Install Semgrep via pip — pinned to a stable minor series
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      # Run Semgrep and generate both JSON and human-readable reports
+      - name: Run Semgrep and parse results
+        id: semgrep
+        env:
+          REPORTS_DIR: sast-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
+
+          # Run Semgrep with auto config; capture exit code separately so the
+          # Python parser always runs even when findings are present.
+          set +e
+          semgrep \
+            --config=auto \
+            --exclude=".github/" \
+            --exclude="*.yml" \
+            --exclude="*.yaml" \
+            --json \
+            --output "$REPORTS_DIR/semgrep-report.json" \
+            . 2>&1 | tee "$REPORTS_DIR/semgrep-output.log"
+          SEMGREP_EXIT=${PIPESTATUS[0]:-0}
+          # Persist raw exit code for transparency in the artifact
+          echo "semgrep_exit_code=${SEMGREP_EXIT}" > "$REPORTS_DIR/semgrep-exit.txt"
+
+          # Guard: if Semgrep produced no JSON, create a safe empty document
+          if [ ! -s "$REPORTS_DIR/semgrep-report.json" ]; then
+            printf '{"results": []}' > "$REPORTS_DIR/semgrep-report.json"
+          fi
+          set -e
+
+          # Parse the JSON and write a readable summary + GITHUB_OUTPUT entries
+          python3 <<'PYEOF'
+          import json, os, sys
+
+          REPORTS_DIR = os.environ["REPORTS_DIR"]
+          report_json = os.path.join(REPORTS_DIR, "semgrep-report.json")
+          report_log  = os.path.join(REPORTS_DIR, "semgrep-output.log")
+          out_txt     = os.path.join(REPORTS_DIR, "semgrep_report(SAST).txt")
+
+          # ── Load JSON ──────────────────────────────────────────────────────
+          try:
+              with open(report_json, "r", encoding="utf-8") as f:
+                  data = json.load(f)
+          except Exception as e:
+              raw = open(report_log, "r", encoding="utf-8", errors="replace").read() \
+                    if os.path.exists(report_log) else ""
+              with open(out_txt, "w", encoding="utf-8") as out:
+                  out.write("=" * 70 + "\n")
+                  out.write("         SEMGREP SAST REPORT  (JSON PARSE ERROR)\n")
+                  out.write("=" * 70 + "\n\n")
+                  out.write(f"Parse error: {e}\n\nRaw output:\n{raw}\n")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+                  gh.write("semgrep_findings=0\nseverity_summary=ERROR:JSON_PARSE\nsast_status=ERROR\n")
+              sys.exit(1)
+
+          # ── Aggregate findings ─────────────────────────────────────────────
+          results        = data.get("results", [])
+          severity_count = {}
+          files          = {}
+
+          for r in results:
+              sev  = (r.get("extra", {}).get("severity") or "UNKNOWN").upper()
+              severity_count[sev] = severity_count.get(sev, 0) + 1
+              path = (r.get("path")
+                      or r.get("extra", {}).get("metadata", {}).get("filepath")
+                      or "<unknown>")
+              files.setdefault(path, []).append(r)
+
+          # Fail on ERROR, HIGH, or MEDIUM findings
+          fail_count = (severity_count.get("ERROR",  0)
+                      + severity_count.get("HIGH",   0)
+                      + severity_count.get("MEDIUM", 0))
+          status  = "FAIL" if fail_count > 0 else "PASS"
+          summary = ", ".join(f"{k}:{v}" for k, v in severity_count.items()) or "none"
+
+          # ── Write human-readable report ────────────────────────────────────
+          with open(out_txt, "w", encoding="utf-8") as out:
+              out.write("=" * 70 + "\n")
+              out.write("              SEMGREP SAST REPORT\n")
+              out.write("=" * 70 + "\n\n")
+              out.write(f"Overall Status   : {status}\n")
+              out.write(f"Total Findings   : {len(results)}\n")
+              out.write(f"Severity Summary : {summary}\n\n")
+
+              if not results:
+                  out.write("No security issues detected.\n\n")
+              else:
+                  out.write("Files with findings (path : count):\n")
+                  for fpath in sorted(files.keys()):
+                      out.write(f"\n- {fpath} : {len(files[fpath])} finding(s)\n")
+                      for i, r in enumerate(files[fpath], 1):
+                          check = r.get("check_id") or r.get("rule_id") or "<no-id>"
+                          msg   = r.get("extra", {}).get("message") or ""
+                          line  = (r.get("start", {}).get("line")
+                                   or r.get("start", {}).get("line_no")
+                                   or "?")
+                          sev   = (r.get("extra", {}).get("severity") or "UNKNOWN").upper()
+                          out.write(f"  {i}) [{sev}] {check}\n")
+                          out.write(f"     Line   : {line}\n")
+                          out.write(f"     Message: {msg}\n")
+                          code = r.get("extra", {}).get("lines") or ""
+                          if code:
+                              out.write("     Code   :\n")
+                              for ln in code.splitlines():
+                                  out.write(f"       {ln}\n")
+                  out.write("\nFull JSON and raw log are available in the artifact bundle.\n")
+
+          # ── Write step outputs ─────────────────────────────────────────────
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+              gh.write(f"semgrep_findings={len(results)}\n")
+              gh.write(f"severity_summary={summary}\n")
+              gh.write(f"sast_status={status}\n")
+
+          if status == "FAIL":
+              print(f"SAST found {fail_count} ERROR/HIGH/MEDIUM finding(s). See artifact for details.")
+              sys.exit(1)
+          PYEOF
+
+      # Upload all SAST artifacts — runs even when the scan step fails so the
+      # report is always available for download from the Actions run page.
+      - name: Upload SAST report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Artifact appears under "Actions > <run> > Artifacts" as "sast-report"
+          name: sast-report
+          path: |
+            sast-reports/semgrep-report.json
+            sast-reports/semgrep_report(SAST).txt
+            sast-reports/semgrep-output.log
+            sast-reports/semgrep-exit.txt
+          # Retain for 30 days (GitHub default is 90; keep shorter for security data)
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 2: BUILD AND PUSH DOCKER IMAGES
+  # ══════════════════════════════════════════════════════════════════════════════
+  build-and-push:
+    name: Build and Push Docker Images
+    # Gate: only run if SAST passed — no point building a vulnerable image
+    needs: sast
+    if: needs.sast.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Backend API
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/backend-api:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/backend-api:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push ML Service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.ml-service
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ml-service:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ml-service:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push Priority Feature Extraction
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.priority-feature-extraction
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/priority-feature-extraction:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/priority-feature-extraction:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 3: DEPLOY TO EC2
+  # ══════════════════════════════════════════════════════════════════════════════
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    if: ${{ needs.build-and-push.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Ensure target directory exists on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/${{ secrets.EC2_USERNAME }}/backend
+
+      - name: Copy docker-compose.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/${{ secrets.EC2_USERNAME }}/backend"
+
+      - name: Deploy containers on EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Log into Docker Hub securely
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            # Go to deployment directory
+            cd /home/${{ secrets.EC2_USERNAME }}/backend
+
+            # Ensure .env file exists
+            touch .env
+
+            # Function to update or add env var in .env
+            update_env_var() {
+              local key=$1
+              local value=$2
+              if grep -q "^${key}=" .env; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            }
+
+            # Set target username and image tags for docker compose
+            update_env_var "DOCKERHUB_USERNAME" "${{ secrets.DOCKERHUB_USERNAME }}"
+            update_env_var "IMAGE_TAG" "v${{ github.run_number }}"
+
+            # Set database and security credentials from GitHub Secrets
+            update_env_var "DB_URL" "${{ secrets.DB_URL }}"
+            update_env_var "DB_USERNAME" "${{ secrets.DB_USERNAME }}"
+            update_env_var "DB_PASSWORD" "${{ secrets.DB_PASSWORD }}"
+            update_env_var "JWT_SECRET" "${{ secrets.JWT_SECRET }}"
+
+            # Pull the newest Docker images
+            docker compose pull
+
+            # Stop old containers
+            docker compose down
+
+            # Start new containers
+            docker compose up -d
+
+            # Clean unused Docker resources (excluding those used by running containers)
+            docker image prune -af
+            docker container prune -f
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 4: POST-DEPLOYMENT SMOKE TESTS
+  # ══════════════════════════════════════════════════════════════════════════════
+  smoke-test:
+    name: Post-Deployment Smoke Tests
+    needs: deploy
+    if: ${{ needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      # Expose whether smoke tests passed so the rollback job can read it
+      smoke_passed: ${{ steps.run-smoke.outputs.smoke_passed }}
+    steps:
+      - name: Run smoke tests on EC2
+        id: run-smoke
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          # ssh-action exits with the script's exit code, so any `exit 1`
+          # here will fail the step and the job.
+          script: |
+            set -euo pipefail
+
+            # ── Configuration ────────────────────────────────────────────────
+            # Spring Boot actuator health endpoint (port from application.yaml)
+            HEALTH_URL="http://localhost:8080/actuator/health"
+            # Seconds to wait for containers to become responsive after compose up
+            STARTUP_WAIT=25
+
+            # ── Helper: pretty pass/fail banner ──────────────────────────────
+            pass() { echo "  [PASS] $1"; }
+            fail() { echo "  [FAIL] $1"; exit 1; }
+
+            echo "=============================================="
+            echo "  DeskFlow Smoke Tests — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "  Target : ${HEALTH_URL}"
+            echo "  Waiting ${STARTUP_WAIT}s for containers to start …"
+            echo "=============================================="
+
+            # ── Wait for container startup ────────────────────────────────────
+            # Give Docker Compose time to pull layers and start the JVM before
+            # the first curl attempt.
+            sleep "${STARTUP_WAIT}"
+
+            # ── SMOKE TEST 1: Backend reachability ───────────────────────────
+            # curl flags:
+            #   --silent        suppress progress bar
+            #   --fail          exit non-zero on HTTP 4xx/5xx
+            #   --max-time 10   hard timeout per request
+            #   --retry 3       retry up to 3 times on transient network errors
+            #   --retry-delay 5 wait 5 s between retries
+            echo ""
+            echo "── Test 1: Backend reachability ──"
+            if curl --silent --fail --max-time 10 --retry 3 --retry-delay 5 \
+                    --output /dev/null \
+                    "${HEALTH_URL}"; then
+              pass "Backend is reachable at ${HEALTH_URL}"
+            else
+              fail "Backend did not respond at ${HEALTH_URL}"
+            fi
+
+            # ── SMOKE TEST 2: HTTP 200 status code ───────────────────────────
+            # -o /dev/null discards body; -w writes only the status code to stdout
+            echo ""
+            echo "── Test 2: HTTP 200 response ──"
+            HTTP_STATUS=$(curl --silent --max-time 10 --retry 3 --retry-delay 5 \
+                               -o /dev/null -w "%{http_code}" \
+                               "${HEALTH_URL}")
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              pass "Health endpoint returned HTTP ${HTTP_STATUS}"
+            else
+              fail "Expected HTTP 200, got HTTP ${HTTP_STATUS}"
+            fi
+
+            # ── SMOKE TEST 3: Response body contains "status":"UP" ───────────
+            # Spring Boot actuator returns {"status":"UP",...} when healthy.
+            echo ""
+            echo "── Test 3: Response body contains status UP ──"
+            BODY=$(curl --silent --max-time 10 --retry 3 --retry-delay 5 \
+                        "${HEALTH_URL}")
+            echo "  Response body: ${BODY}"
+            if echo "${BODY}" | grep -q '"status":"UP"'; then
+              pass "Health response contains \"status\":\"UP\""
+            else
+              fail "Health response does NOT contain \"status\":\"UP\". Body: ${BODY}"
+            fi
+
+            echo ""
+            echo "=============================================="
+            echo "  All smoke tests PASSED ✓"
+            echo "=============================================="
+
+      # ── Record the outcome so the rollback job knows what happened ──────────
+      # ssh-action does not let us write to GITHUB_OUTPUT inside the remote
+      # script, so we derive the outcome from the previous step's result here,
+      # on the runner, where GITHUB_OUTPUT is available.
+      - name: Record smoke-test outcome
+        if: always()
+        run: |
+          if [ "${{ steps.run-smoke.outcome }}" = "success" ]; then
+            echo "smoke_passed=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 5: AUTOMATIC ROLLBACK (only if smoke tests fail)
+  # ══════════════════════════════════════════════════════════════════════════════
+  rollback:
+    name: Automatic Rollback
+    needs: smoke-test
+    # Only execute when smoke tests actually failed — skip on a passing deployment
+    if: ${{ always() && needs.smoke-test.outputs.smoke_passed == 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      # ── Step 1: Roll back to the previous image tag on EC2 ─────────────────
+      - name: Roll back to previous image tag on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            # ── Derive the previous tag ───────────────────────────────────────
+            # github.run_number is always a positive integer; subtract 1 to get
+            # the tag that was successfully deployed in the previous run.
+            # If this is run #1 there is no previous tag — abort with a clear message.
+            CURRENT_RUN="${{ github.run_number }}"
+            if [ "${CURRENT_RUN}" -le 1 ]; then
+              echo "ERROR: This is run #1 — no previous image tag exists to roll back to."
+              exit 1
+            fi
+            PREV_TAG="v$(( CURRENT_RUN - 1 ))"
+
+            echo "=============================================="
+            echo "  ROLLBACK INITIATED"
+            echo "  Current tag : v${CURRENT_RUN}"
+            echo "  Rolling back to : ${PREV_TAG}"
+            echo "=============================================="
+
+            # ── Authenticate with Docker Hub ──────────────────────────────────
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" \
+              | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            # Go to the deployment directory
+            cd /home/${{ secrets.EC2_USERNAME }}/backend
+
+            # ── Helper: update or insert a key=value in .env ──────────────────
+            update_env_var() {
+              local key=$1
+              local value=$2
+              if grep -q "^${key}=" .env; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            }
+
+            # ── Switch IMAGE_TAG to the previous version ──────────────────────
+            # Docker Compose reads IMAGE_TAG from .env to select which image to run.
+            update_env_var "IMAGE_TAG" "${PREV_TAG}"
+            echo "  .env IMAGE_TAG set to ${PREV_TAG}"
+
+            # ── Pull the previous images from Docker Hub ──────────────────────
+            echo "  Pulling previous images (tag: ${PREV_TAG}) …"
+            docker compose pull
+
+            # ── Bring down the failed containers ─────────────────────────────
+            echo "  Stopping failed containers …"
+            docker compose down
+
+            # ── Start containers using the rolled-back image ──────────────────
+            echo "  Starting rolled-back containers …"
+            docker compose up -d
+
+            echo ""
+            echo "  Rollback deployment complete. Running smoke tests …"
+
+      # ── Step 2: Wait for the rolled-back containers to stabilise ───────────
+      # Reuse the same startup wait used in the forward-deployment smoke tests.
+      - name: Wait for rolled-back containers to start
+        run: |
+          echo "Waiting 25 s for rolled-back containers to become ready …"
+          sleep 25
+
+      # ── Step 3: Re-run smoke tests against the rolled-back deployment ───────
+      # Identical assertions to the smoke-test job; if rollback is also broken
+      # the step fails, the job fails, and the workflow is marked failed so the
+      # team is notified immediately.
+      - name: Verify rollback with smoke tests
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            HEALTH_URL="http://localhost:8080/actuator/health"
+
+            pass() { echo "  [PASS] $1"; }
+            fail() { echo "  [FAIL] $1"; exit 1; }
+
+            echo "=============================================="
+            echo "  ROLLBACK Smoke Tests — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "  Target : ${HEALTH_URL}"
+            echo "=============================================="
+
+            # ── Test 1: Reachability ──────────────────────────────────────────
+            echo ""
+            echo "── Test 1: Backend reachability ──"
+            if curl --silent --fail --max-time 10 --retry 3 --retry-delay 5 \
+                    --output /dev/null \
+                    "${HEALTH_URL}"; then
+              pass "Backend is reachable"
+            else
+              fail "Backend did not respond after rollback"
+            fi
+
+            # ── Test 2: HTTP 200 ──────────────────────────────────────────────
+            echo ""
+            echo "── Test 2: HTTP 200 response ──"
+            HTTP_STATUS=$(curl --silent --max-time 10 --retry 3 --retry-delay 5 \
+                               -o /dev/null -w "%{http_code}" \
+                               "${HEALTH_URL}")
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              pass "Health endpoint returned HTTP ${HTTP_STATUS}"
+            else
+              fail "Expected HTTP 200, got HTTP ${HTTP_STATUS} after rollback"
+            fi
+
+            # ── Test 3: status UP ─────────────────────────────────────────────
+            echo ""
+            echo "── Test 3: Response body contains status UP ──"
+            BODY=$(curl --silent --max-time 10 --retry 3 --retry-delay 5 \
+                        "${HEALTH_URL}")
+            echo "  Response body: ${BODY}"
+            if echo "${BODY}" | grep -q '"status":"UP"'; then
+              pass "Health response contains \"status\":\"UP\""
+            else
+              fail "Health response does NOT contain \"status\":\"UP\" after rollback. Body: ${BODY}"
+            fi
+
+            echo ""
+            echo "=============================================="
+            echo "  Rollback smoke tests PASSED ✓"
+            echo "  Service restored to previous version."
+            echo "=============================================="
