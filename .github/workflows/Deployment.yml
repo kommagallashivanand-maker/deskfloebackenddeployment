@@ -190,7 +190,7 @@ jobs:
       # exit-code: 0 here so this step never fails on its own — the
       # human-readable step below is the one that enforces the gate.
       - name: Run Trivy — SARIF report
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -205,7 +205,7 @@ jobs:
       # write it to a file for the artifact.  exit-code: 1 makes THIS step
       # fail (and therefore the job) when HIGH/CRITICAL vulnerabilities exist.
       - name: Run Trivy — table report (pipeline gate)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
