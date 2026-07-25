@@ -610,7 +610,7 @@ jobs:
 
             echo "  Rollback deployment complete."
 
-      # ── Step 2: Poll until the rolled-back backend is healthy ────────────
+      # ── Step 2: Poll until the rolled-back backend is healthy check ────────────
       # FIX 3 — old rollback used a fixed "sleep 25" and then the same
       # broken --retry curl flags.  Replace with the same robust poll loop
       # used in the forward smoke test so rollback verification is consistent.
