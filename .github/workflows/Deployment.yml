@@ -168,13 +168,14 @@ jobs:
 
   # ══════════════════════════════════════════════════════════════════════════════
   # JOB 2: TRIVY FILESYSTEM VULNERABILITY SCAN
-  # Purpose: Scans the repository filesystem for vulnerable dependencies,
-  #          OS packages, and misconfigurations BEFORE any Docker image is built.
-  #          Uses the official aquasecurity/trivy-action.
-  #          Exits with code 1 only on HIGH or CRITICAL findings (LOW/MEDIUM
-  #          are reported but do not block the pipeline).
-  #          Generates both a SARIF report (for GitHub Security tab) and a
-  #          human-readable table report, both uploaded as downloadable artifacts.
+  # Purpose: Scans the repository filesystem for vulnerable dependencies
+  #          BEFORE any Docker image is built.
+  #          Exits with code 1 only on HIGH or CRITICAL findings.
+  #          LOW/MEDIUM are reported but do not block the pipeline.
+  #          Secret scanning is intentionally disabled — Gitleaks in
+  #          security-ci.yml already covers secrets.
+  #          Generates both a SARIF report and a human-readable table report,
+  #          both uploaded as downloadable artifacts.
   # Runs:    In parallel with SAST — build-and-push waits for BOTH to pass.
   # ══════════════════════════════════════════════════════════════════════════════
   trivy-scan:
@@ -185,30 +186,46 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # Create the output directory before Trivy runs.
+      # Root cause of the original failure: aquasecurity/trivy-action writes
+      # the report file directly via Go's os.Create(), which does NOT create
+      # parent directories. If the directory doesn't exist the action crashes
+      # with "open trivy-reports/…: no such file or directory".
+      # mkdir -p is idempotent — safe to run even if the directory exists.
+      - name: Create Trivy reports directory
+        run: mkdir -p trivy-reports
+
       # ── SARIF report ──────────────────────────────────────────────────────
-      # Produces a machine-readable SARIF file.
-      # exit-code: 0 here so this step never fails on its own — the
-      # human-readable step below is the one that enforces the gate.
+      # Produces a machine-readable SARIF file for the GitHub Security tab.
+      # scanners: vuln  — scan only for vulnerabilities; skip secret scanning
+      #                   because Gitleaks already handles that in security-ci.yml.
+      # exit-code: "0"  — this step never fails on its own; the table step
+      #                   below is the actual pipeline gate.
       - name: Run Trivy — SARIF report
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln
           format: sarif
           output: trivy-reports/trivy-report.sarif
           severity: HIGH,CRITICAL
           exit-code: "0"
           ignore-unfixed: false
 
-      # ── Human-readable table report ───────────────────────────────────────
-      # Runs a second pass to produce a readable table in the Actions log AND
-      # write it to a file for the artifact.  exit-code: 1 makes THIS step
-      # fail (and therefore the job) when HIGH/CRITICAL vulnerabilities exist.
+      # ── Human-readable table report (pipeline gate) ───────────────────────
+      # Second pass: prints a readable findings table in the Actions log AND
+      # writes the same output to a file for the artifact bundle.
+      # scanners: vuln  — mirrors the SARIF step; vuln-only, no secret scan.
+      # exit-code: "1"  — fails THIS step (and therefore the job) when any
+      #                   HIGH or CRITICAL vulnerability is found, blocking
+      #                   build-and-push from running.
       - name: Run Trivy — table report (pipeline gate)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
+          scanners: vuln
           format: table
           output: trivy-reports/trivy-report.txt
           severity: HIGH,CRITICAL
