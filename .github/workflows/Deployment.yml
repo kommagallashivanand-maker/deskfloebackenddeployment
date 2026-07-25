@@ -332,48 +332,78 @@ jobs:
             set -euo pipefail
 
             # ── Configuration ────────────────────────────────────────────────
-            # Spring Boot actuator health endpoint (port from application.yaml)
             HEALTH_URL="http://localhost:8080/actuator/health"
-            # Seconds to wait for containers to become responsive after compose up
-            STARTUP_WAIT=25
+            # Maximum seconds to wait for the backend to become ready
+            MAX_WAIT=120
+            # How often to poll (seconds)
+            POLL_INTERVAL=5
 
-            # ── Helper: pretty pass/fail banner ──────────────────────────────
             pass() { echo "  [PASS] $1"; }
-            fail() { echo "  [FAIL] $1"; exit 1; }
+            fail() {
+              echo "  [FAIL] $1"
+              # ── Diagnostics: dump container state so the cause is visible ──
+              echo ""
+              echo "══ DIAGNOSTICS ══════════════════════════════"
+              echo "── Running containers:"
+              docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+              echo ""
+              echo "── All containers (including stopped):"
+              docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+              echo ""
+              echo "── Last 50 lines of backend container logs:"
+              docker logs --tail=50 $(docker ps -a --filter "name=backend" --format "{{.Names}}" | head -1) 2>&1 || \
+              docker compose -f /home/$USER/backend/docker-compose.yml logs --tail=50 backend 2>&1 || true
+              echo "══ END DIAGNOSTICS ══════════════════════════"
+              exit 1
+            }
 
             echo "=============================================="
             echo "  DeskFlow Smoke Tests — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-            echo "  Target : ${HEALTH_URL}"
-            echo "  Waiting ${STARTUP_WAIT}s for containers to start …"
+            echo "  Target      : ${HEALTH_URL}"
+            echo "  Max wait    : ${MAX_WAIT}s (polling every ${POLL_INTERVAL}s)"
             echo "=============================================="
 
-            # ── Wait for container startup ────────────────────────────────────
-            # Give Docker Compose time to pull layers and start the JVM before
-            # the first curl attempt.
-            sleep "${STARTUP_WAIT}"
+            # ── Wait loop: poll until backend responds or timeout ─────────────
+            # Uses curl without --fail so we get the HTTP status even on 4xx/5xx.
+            # Exits the loop as soon as we get any HTTP response (backend is up)
+            # or bails out after MAX_WAIT seconds.
+            echo ""
+            echo "── Waiting for backend to become ready …"
+            ELAPSED=0
+            READY=false
+            while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+              HTTP_CODE=$(curl --silent --max-time 5 \
+                               -o /dev/null -w "%{http_code}" \
+                               "${HEALTH_URL}" 2>/dev/null || echo "000")
+              if [ "$HTTP_CODE" != "000" ]; then
+                echo "  Backend responded with HTTP ${HTTP_CODE} after ${ELAPSED}s"
+                READY=true
+                break
+              fi
+              echo "  [${ELAPSED}s] No response yet — retrying in ${POLL_INTERVAL}s …"
+              sleep "$POLL_INTERVAL"
+              ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+            done
+
+            if [ "$READY" = "false" ]; then
+              fail "Backend did not respond within ${MAX_WAIT}s at ${HEALTH_URL}"
+            fi
 
             # ── SMOKE TEST 1: Backend reachability ───────────────────────────
-            # curl flags:
-            #   --silent        suppress progress bar
-            #   --fail          exit non-zero on HTTP 4xx/5xx
-            #   --max-time 10   hard timeout per request
-            #   --retry 3       retry up to 3 times on transient network errors
-            #   --retry-delay 5 wait 5 s between retries
             echo ""
             echo "── Test 1: Backend reachability ──"
-            if curl --silent --fail --max-time 10 --retry 3 --retry-delay 5 \
+            if curl --silent --fail --max-time 10 \
                     --output /dev/null \
                     "${HEALTH_URL}"; then
               pass "Backend is reachable at ${HEALTH_URL}"
             else
-              fail "Backend did not respond at ${HEALTH_URL}"
+              fail "Backend is up but returned an error status at ${HEALTH_URL}"
             fi
 
             # ── SMOKE TEST 2: HTTP 200 status code ───────────────────────────
-            # -o /dev/null discards body; -w writes only the status code to stdout
             echo ""
             echo "── Test 2: HTTP 200 response ──"
-            HTTP_STATUS=$(curl --silent --max-time 10 --retry 3 --retry-delay 5 \
+            HTTP_STATUS=$(curl --silent --max-time 10 \
                                -o /dev/null -w "%{http_code}" \
                                "${HEALTH_URL}")
             if [ "${HTTP_STATUS}" = "200" ]; then
@@ -383,11 +413,9 @@ jobs:
             fi
 
             # ── SMOKE TEST 3: Response body contains "status":"UP" ───────────
-            # Spring Boot actuator returns {"status":"UP",...} when healthy.
             echo ""
             echo "── Test 3: Response body contains status UP ──"
-            BODY=$(curl --silent --max-time 10 --retry 3 --retry-delay 5 \
-                        "${HEALTH_URL}")
+            BODY=$(curl --silent --max-time 10 "${HEALTH_URL}")
             echo "  Response body: ${BODY}"
             if echo "${BODY}" | grep -q '"status":"UP"'; then
               pass "Health response contains \"status\":\"UP\""
