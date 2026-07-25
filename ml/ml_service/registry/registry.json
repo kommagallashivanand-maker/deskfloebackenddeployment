@@ -1,0 +1,32 @@
+{
+    "category": {
+        "active": "embedding_v1",
+        "versions": {
+            "baseline_v1": {
+                "artifact": "../../baseline_classifier/models/baseline_v1.pkl",
+                "metadata": "../../baseline_classifier/models/baseline_v1_metadata.json",
+                "type": "sklearn_pipeline"
+            },
+            "embedding_v1": {
+                "artifact": "../../embedding_classifier/models/embedding_v1.pkl",
+                "metadata": "../../embedding_classifier/models/embedding_v1_metadata.json",
+                "type": "embedding_artefact"
+            }
+        }
+    },
+    "priority": {
+        "active": "priority_v1_latest",
+        "versions": {
+            "priority_v1": {
+                "artifact": "../../train_priority_model/models/priority_model_v1.0.0.joblib",
+                "metadata": null,
+                "type": "sklearn_pipeline"
+            },
+            "priority_v1_latest": {
+                "artifact": "../../train_priority_model/models/priority_model_latest.joblib",
+                "metadata": null,
+                "type": "sklearn_pipeline"
+            }
+        }
+    }
+}
