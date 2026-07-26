@@ -12,10 +12,13 @@ import com.p99soft.deskflow.exception.ResourceNotFoundException;
 import com.p99soft.deskflow.repository.CategoryRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
+import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.service.TicketService;
 import com.p99soft.deskflow.mapper.TicketMapper;
 import com.p99soft.deskflow.entity.TicketAttachment;
+import com.p99soft.deskflow.entity.SlaPolicy;
 import com.p99soft.deskflow.service.StorageService;
+import com.p99soft.deskflow.event.TicketEventPublisher;
 import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import lombok.RequiredArgsConstructor;
@@ -50,6 +53,8 @@ public class TicketServiceImpl implements TicketService {
     private final TicketMapper ticketMapper;
     private final StorageService storageService;
     private final ActivityService activityService;
+    private final TicketEventPublisher ticketEventPublisher;
+    private final SlaPolicyRepository slaPolicyRepository;
 
     private static final Map<Status, Set<Status>> ALLOWED_TRANSITIONS = Map.of(
             Status.OPEN, Set.of(Status.TRIAGED, Status.IN_PROGRESS, Status.CLOSED),
@@ -115,6 +120,17 @@ public class TicketServiceImpl implements TicketService {
 
         Ticket savedTicket = ticketRepository.save(ticket);
         log.info("Ticket created successfully: id={}, ticketNumber={}", savedTicket.getId(), savedTicket.getTicketNumber());
+
+        SlaPolicy slaPolicy = slaPolicyRepository.findByPriority(priority).orElse(null);
+        int responseHours = slaPolicy != null ? slaPolicy.getResponseTimeHours() : 24;
+        int resolutionHours = slaPolicy != null ? slaPolicy.getResolutionTimeHours() : 120;
+        ticketEventPublisher.publishTicketCreated(savedTicket, responseHours, resolutionHours);
+
+        if (assignee != null) {
+            ticketEventPublisher.publishAssigned(savedTicket, assignee.getId(), creator.getId());
+            ticketEventPublisher.publishFirstResponse(savedTicket, assignee.getId(), savedTicket.getFirstRespondedAt());
+        }
+
         return ticketMapper.mapToResponse(savedTicket);
     }
 
@@ -194,11 +210,13 @@ public class TicketServiceImpl implements TicketService {
             throw new InvalidStatusTransitionException("Invalid status transition from " + oldStatus + " to " + newStatus);
         }
 
+        boolean isReopen = false;
         // Reopen validation: Transition from RESOLVED/CLOSED back to OPEN/IN_PROGRESS
         if ((oldStatus == Status.RESOLVED || oldStatus == Status.CLOSED) &&
                 (newStatus == Status.OPEN || newStatus == Status.IN_PROGRESS)) {
             log.info("Ticket reopened: incrementing reopen count for ticket ID: {}", ticket.getId());
             ticket.setReopenCount(ticket.getReopenCount() + 1);
+            isReopen = true;
         }
 
         ticket.setStatus(newStatus);
@@ -212,6 +230,17 @@ public class TicketServiceImpl implements TicketService {
 
         // Log audit activity
         activityService.logActivity(ticket, ticket.getCreatedBy(), "STATUS_TRANSITION", oldStatus.name(), newStatus.name());
+
+        UUID actorId = ticket.getCreatedBy() != null ? ticket.getCreatedBy().getId() : null;
+        ticketEventPublisher.publishStatusChanged(ticket, oldStatus, newStatus, actorId);
+
+        if (newStatus == Status.RESOLVED) {
+            ticketEventPublisher.publishResolved(ticket, actorId);
+        }
+
+        if (isReopen) {
+            ticketEventPublisher.publishTicketReopened(ticket, actorId, ticket.getReopenCount());
+        }
     }
 
     private void updateCategory(Ticket ticket, UUID categoryId) {
@@ -225,15 +254,26 @@ public class TicketServiceImpl implements TicketService {
 
     private void updateAssignee(Ticket ticket, UUID assignedTo) {
         if (assignedTo != null) {
-            User assignee = userRepository.findById(assignedTo)
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "Assignee User not found with id: " + assignedTo));
+            User currentAssignee = ticket.getAssignedTo();
+            if (currentAssignee == null || !currentAssignee.getId().equals(assignedTo)) {
+                User assignee = userRepository.findById(assignedTo)
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                "Assignee User not found with id: " + assignedTo));
 
-            // Set first response timestamp if it's the first time an assignee is set
-            if (ticket.getAssignedTo() == null && ticket.getFirstRespondedAt() == null) {
-                ticket.setFirstRespondedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+                // Set first response timestamp if it's the first time an assignee is set
+                boolean isFirstResponseSet = false;
+                if (ticket.getAssignedTo() == null && ticket.getFirstRespondedAt() == null) {
+                    ticket.setFirstRespondedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+                    isFirstResponseSet = true;
+                }
+                ticket.setAssignedTo(assignee);
+
+                UUID assignedBy = ticket.getCreatedBy() != null ? ticket.getCreatedBy().getId() : null;
+                ticketEventPublisher.publishAssigned(ticket, assignedTo, assignedBy);
+                if (isFirstResponseSet) {
+                    ticketEventPublisher.publishFirstResponse(ticket, assignedTo, ticket.getFirstRespondedAt());
+                }
             }
-            ticket.setAssignedTo(assignee);
         }
     }
 
