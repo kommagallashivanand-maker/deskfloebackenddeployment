@@ -5,8 +5,10 @@ import com.p99soft.deskflow.dto.TicketResponse;
 import com.p99soft.deskflow.entity.Ticket;
 import com.p99soft.deskflow.entity.User;
 import com.p99soft.deskflow.enums.Priority;
+import com.p99soft.deskflow.enums.Role;
 import com.p99soft.deskflow.enums.Status;
 import com.p99soft.deskflow.exception.InvalidStatusTransitionException;
+import com.p99soft.deskflow.enums.Role;
 import com.p99soft.deskflow.mapper.TicketMapper;
 import com.p99soft.deskflow.repository.CategoryRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
@@ -15,7 +17,6 @@ import com.p99soft.deskflow.service.Impl.TicketServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -43,7 +44,7 @@ class TicketStateMachineTest {
     @Mock
     private ActivityService activityService;
 
-    @InjectMocks
+    // Manually instantiated so we control all constructor arguments
     private TicketServiceImpl ticketService;
 
     private UUID ticketId;
@@ -52,8 +53,17 @@ class TicketStateMachineTest {
 
     @BeforeEach
     void setUp() {
+        ticketService = new TicketServiceImpl(
+                ticketRepository, userRepository, categoryRepository,
+                ticketMapper, storageService, activityService);
+
         ticketId = UUID.randomUUID();
-        mockUser = User.builder().id(UUID.randomUUID()).firstName("John").lastName("Doe").build();
+        mockUser = User.builder()
+                .id(UUID.randomUUID())
+                .firstName("John")
+                .lastName("Doe")
+                .role(Role.AGENT)
+                .build();
         mockTicket = Ticket.builder()
                 .id(ticketId)
                 .ticketNumber("TICK-1001")
@@ -70,28 +80,32 @@ class TicketStateMachineTest {
     void testValidTransition_OpenToTriaged() {
         when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(mockTicket));
         when(ticketRepository.save(any(Ticket.class))).thenAnswer(i -> i.getArgument(0));
-        when(ticketMapper.mapToResponse(any(Ticket.class))).thenReturn(TicketResponse.builder().id(ticketId).status(Status.TRIAGED).build());
+        when(ticketMapper.mapToResponse(any(Ticket.class)))
+                .thenReturn(TicketResponse.builder().id(ticketId).status(Status.TRIAGED).build());
 
         TicketRequest request = TicketRequest.builder().status(Status.TRIAGED).build();
         TicketResponse response = ticketService.updateTicket(ticketId, request);
 
         assertNotNull(response);
         assertEquals(Status.TRIAGED, mockTicket.getStatus());
-        verify(activityService, times(1)).logActivity(eq(mockTicket), eq(mockUser), eq("STATUS_TRANSITION"), eq("OPEN"), eq("TRIAGED"));
+        verify(activityService, times(1)).logActivity(
+                eq(mockTicket), eq(mockUser), eq("STATUS_TRANSITION"), eq("OPEN"), eq("TRIAGED"));
     }
 
     @Test
     void testValidTransition_OpenToInProgress() {
         when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(mockTicket));
         when(ticketRepository.save(any(Ticket.class))).thenAnswer(i -> i.getArgument(0));
-        when(ticketMapper.mapToResponse(any(Ticket.class))).thenReturn(TicketResponse.builder().id(ticketId).status(Status.IN_PROGRESS).build());
+        when(ticketMapper.mapToResponse(any(Ticket.class)))
+                .thenReturn(TicketResponse.builder().id(ticketId).status(Status.IN_PROGRESS).build());
 
         TicketRequest request = TicketRequest.builder().status(Status.IN_PROGRESS).build();
         TicketResponse response = ticketService.updateTicket(ticketId, request);
 
         assertNotNull(response);
         assertEquals(Status.IN_PROGRESS, mockTicket.getStatus());
-        verify(activityService, times(1)).logActivity(eq(mockTicket), eq(mockUser), eq("STATUS_TRANSITION"), eq("OPEN"), eq("IN_PROGRESS"));
+        verify(activityService, times(1)).logActivity(
+                eq(mockTicket), eq(mockUser), eq("STATUS_TRANSITION"), eq("OPEN"), eq("IN_PROGRESS"));
     }
 
     @Test
@@ -100,9 +114,8 @@ class TicketStateMachineTest {
 
         TicketRequest request = TicketRequest.builder().status(Status.RESOLVED).build();
 
-        InvalidStatusTransitionException ex = assertThrows(InvalidStatusTransitionException.class, () -> {
-            ticketService.updateTicket(ticketId, request);
-        });
+        InvalidStatusTransitionException ex = assertThrows(InvalidStatusTransitionException.class,
+                () -> ticketService.updateTicket(ticketId, request));
 
         assertTrue(ex.getMessage().contains("Invalid status transition from OPEN to RESOLVED"));
         verify(ticketRepository, never()).save(any());
@@ -114,7 +127,8 @@ class TicketStateMachineTest {
         mockTicket.setStatus(Status.RESOLVED);
         when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(mockTicket));
         when(ticketRepository.save(any(Ticket.class))).thenAnswer(i -> i.getArgument(0));
-        when(ticketMapper.mapToResponse(any(Ticket.class))).thenReturn(TicketResponse.builder().id(ticketId).status(Status.OPEN).reopenCount(1).build());
+        when(ticketMapper.mapToResponse(any(Ticket.class)))
+                .thenReturn(TicketResponse.builder().id(ticketId).status(Status.OPEN).reopenCount(1).build());
 
         TicketRequest request = TicketRequest.builder().status(Status.OPEN).build();
         ticketService.updateTicket(ticketId, request);
