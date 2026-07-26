@@ -156,13 +156,32 @@ Evaluation completed successfully.
   - Technical: 0.5714
 
 **priority_model** (RandomForest + extracted features):
-- **Macro-Precision**: 0.5232
-- **Macro-Recall**: 0.6694
+- **Macro-Precision**: 0.5232 ❌ **INCORRECT** (measured with simplified inline feature extraction)
+- **Macro-Recall**: 0.6694 ❌ **INCORRECT**
+
+**CORRECTED baseline (2026-07-24, v1.0.0 model)** after fixing feature extraction to use REAL DF-026 pipeline:
+- **Macro-Precision**: 0.4846 (local eval, YAKE+spaCy keywords, VADER sentiment)
+- **Macro-Recall**: 0.6428
 - Per-class precision/recall:
-  - Urgent: Precision=0.5000, Recall=1.0000
-  - High: Precision=0.2105, Recall=0.6667
-  - Medium: Precision=0.5000, Recall=0.2609
-  - Low: Precision=0.8824, Recall=0.7500
+  - Urgent: Precision=0.2000, Recall=1.0000
+  - High: Precision=0.2000, Recall=0.6667
+  - Medium: Precision=0.5385, Recall=0.3043
+  - Low: Precision=1.0000, Recall=0.6000
+
+**Current CI baseline (2026-07-24, priority_model v1.1.0, spaCy required)**:
+- **Macro-Precision**: 0.5372
+- **Macro-Recall**: 0.6955
+- Per-class precision/recall:
+  - Urgent: Precision=0.2500, Recall=1.0000
+  - High: Precision=0.3077, Recall=0.6667
+  - Medium: Precision=0.5909, Recall=0.5652
+  - Low: Precision=1.0000, Recall=0.5500
+
+### Environment consistency
+
+Priority baselines above assume **`en_core_web_sm` is loaded**. Production installs it via `ml/priority_feature_extraction/requirements.txt`. Until the spaCy parity fix, `ml/eval_harness/requirements.txt` only listed `spacy` (no model wheel) and `.github/workflows/eval-harness.yml` did not run `spacy download`, so CI used the YAKE/bigram fallback and reported much lower recall (~0.37). Documented v1.0.0/v1.1.0 numbers were measured **locally with spaCy** and were not validated in CI until the fix.
+
+Pre-`1ba540a` eval used **inline simplified** keyword extraction; metrics 0.5232 / 0.6694 are not comparable to DF-026 or production.
 
 ## Task 3: CI Thresholds
 
@@ -173,16 +192,18 @@ Thresholds are set at **15% below baseline performance** to:
 2. Catch genuine regressions (e.g., broken model loading, feature extraction bugs)
 3. Avoid false-positive CI failures from minor fluctuations
 
-### Implemented Thresholds
+### Implemented Thresholds (Corrected 2026-07-24, v1.1.0 + spaCy parity)
 
 ```python
 # In ml/eval_harness/eval.py check_thresholds()
 
-THRESHOLD_BASELINE_F1 = 0.78          # 15% below 0.9209
-THRESHOLD_EMBEDDINGS_F1 = 0.69        # 15% below 0.8163
-THRESHOLD_PRIORITY_PRECISION = 0.44   # 15% below 0.5232
-THRESHOLD_PRIORITY_RECALL = 0.57      # 15% below 0.6694
+THRESHOLD_BASELINE_F1 = 0.78          # 15% below 0.9209 (unchanged)
+THRESHOLD_EMBEDDINGS_F1 = 0.69        # 15% below 0.8163 (unchanged)
+THRESHOLD_PRIORITY_PRECISION = 0.46   # 15% below 0.5372 (v1.1.0, spaCy-consistent)
+THRESHOLD_PRIORITY_RECALL = 0.59      # 15% below 0.6955 (v1.1.0, spaCy-consistent)
 ```
+
+**Threshold history**: Priority thresholds were first corrected after DF-026 integration (0.41 / 0.55 vs v1.0.0 baseline 0.4846 / 0.6428). They were recalibrated again after confirming v1.1.0 baselines with spaCy installed in both local and CI environments.
 
 ### Failure Behavior
 
@@ -212,7 +233,7 @@ Thresholds and baseline numbers are documented in:
 ## Verification Summary
 
 ✅ **All 3 model wrappers implemented with real inference**  
-✅ **All 14 tests pass (metrics + model smoke tests)**  
+✅ **All 15 tests pass (metrics + model smoke tests + spaCy env check)**  
 ✅ **Eval harness runs successfully with real predictions**  
 ✅ **Real confidence values across 0.0-1.0 range (not uniform/random)**  
 ✅ **CI thresholds set with clear rationale**  
@@ -231,6 +252,7 @@ Thresholds and baseline numbers are documented in:
 
 ### Created:
 - `ml/eval_harness/tests/test_models.py` - Smoke tests for all 3 models
+- `ml/eval_harness/tests/test_spacy_environment.py` - Asserts en_core_web_sm is loaded for CI
 - `ml/eval_harness/display_metrics.py` - Utility to display metrics in readable format
 - `ml/eval_harness/REAL_MODEL_INTEGRATION_SUMMARY.md` - This summary document
 
@@ -242,7 +264,5 @@ To `ml/eval_harness/requirements.txt`:
 - pandas (DataFrame inputs)
 - numpy (numerical operations)
 - sentence-transformers (embeddings model)
-- torch (SentenceTransformers backend)
-- transformers (SentenceTransformers dependency)
-
-All installed successfully in `.venv` without conflicts.
+- pydantic / pydantic-settings / vaderSentiment / yake / spacy (DF-026 feature extraction)
+- en_core_web_sm wheel URL (spaCy English model — required for priority eval parity with production)

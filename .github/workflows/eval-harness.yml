@@ -29,6 +29,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r ml/eval_harness/requirements.txt
 
+      - name: Install spaCy language model
+        run: python -m spacy download en_core_web_sm
+
+      - name: Verify spaCy model
+        run: python -c "import spacy; spacy.load('en_core_web_sm')"
+
       - name: Run Test Suite
         working-directory: ml/eval_harness
         run: pytest tests/ -v

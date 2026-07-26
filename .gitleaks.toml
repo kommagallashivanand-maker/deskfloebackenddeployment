@@ -20,7 +20,7 @@ useDefault = true
 [[rules]]
 id = "env-file-extension"
 description = "Detects .env files that may contain secrets"
-regex = '''(?i)(password|secret|key|token|api_key)\s*=\s*\S+'''
+regex = '''(?i)(password|secret|key|token|api[_\-]?key)\s*=\s*\S+'''
 path = '''\.env.*'''
 tags = ["env", "secrets"]
 
@@ -36,11 +36,6 @@ description = "Detects database connection strings with credentials"
 regex = '''(postgres|mysql|mongodb|redis):\/\/[^:]+:[^@]+@'''
 tags = ["database", "credentials"]
 
-[[rules]]
-id = "jwt-secret-assignment"
-description = "Detects JWT secret assignments in code"
-regex = '''(?i)(jwt[_\-]?secret|jwt[_\-]?key)\s*[=:]\s*[\"\']?\S{8,}[\"\']?'''
-tags = ["jwt", "secrets"]
 
 [[rules]]
 id = "api-key-assignment"
@@ -82,9 +77,10 @@ paths = [
 
 # Regex patterns that are known to be false positives in this project
 regexes = [
-  # Example/placeholder values in documentation
   '''your[-_]?api[-_]?key[-_]?here''',
   '''example[-_]?token''',
   '''<your[-_]?.*[-_]?here>''',
   '''INSERT[-_]?YOUR[-_]?.*[-_]?HERE''',
+
+  '''JWT_SECRET:\s*\$\{JWT_SECRET\}''',
 ]

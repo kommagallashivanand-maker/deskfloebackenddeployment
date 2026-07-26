@@ -28,14 +28,18 @@ from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+# Use centralized path resolution (Docker-safe)
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from ml.common.paths import get_repo_root, get_training_data_path
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-MODEL_VERSION = "v1.0.0"
+MODEL_VERSION = "v1.1.0"
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent.parent           # DeskFlow-backend/
-DATA_PATH = REPO_ROOT / "tickets_extracted_features.csv"
+REPO_ROOT = get_repo_root()
+DATA_PATH = get_training_data_path()
 MODELS_DIR = SCRIPT_DIR / "models"
 
 # Feature column groups
@@ -151,9 +155,22 @@ def build_preprocessor(categorical_features: list) -> ColumnTransformer:
 def build_pipeline(categorical_features: list) -> Pipeline:
     """Assemble the full preprocessing + classifier pipeline."""
     preprocessor = build_preprocessor(categorical_features)
+    
+    # Custom class weights to address Medium→High misclassification pattern
+    # Error analysis (DF-028) showed High is over-predicted (precision=0.20, 16 FPs),
+    # while Medium is under-predicted (recall=0.30, only 7/23 caught).
+    # Strategy: Reduce High's weight to penalize false positives, while keeping
+    # Medium's weight elevated to encourage correct Medium predictions.
+    class_weight = {
+        "Low": 1.0,      # Well-performing class (precision=1.0, recall=0.6)
+        "Medium": 2.5,   # Increase weight to improve recall (currently 0.30)
+        "High": 0.7,     # Decrease weight to reduce false positives (currently 16 FPs)
+        "Urgent": 1.5,   # Keep elevated for rare but critical class
+    }
+    
     classifier = RandomForestClassifier(
         n_estimators=300,
-        class_weight="balanced",
+        class_weight=class_weight,  # Changed from "balanced" to custom weights
         max_features="sqrt",
         random_state=RANDOM_STATE,
         n_jobs=-1,
