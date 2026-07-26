@@ -4,11 +4,41 @@ Repository for ticket embedding operations.
 Handles all database interactions related to ticket embeddings.
 """
 
-from ml.similar_tickets.database.postgres import PostgresDB
 import psycopg
+
+from ml.similar_tickets.database.postgres import PostgresDB
+
 
 class EmbeddingRepository:
     """Repository for CRUD and similarity search operations."""
+
+    def get_ticket(
+        self,
+        ticket_id,
+    ):
+        """
+        Fetch ticket title and description.
+        """
+
+        query = """
+        SELECT
+            id,
+            title,
+            description
+        FROM tickets
+        WHERE id = %s;
+        """
+
+        with PostgresDB.get_connection() as conn:
+            with conn.cursor(
+                row_factory=psycopg.rows.dict_row,
+            ) as cursor:
+                cursor.execute(
+                    query,
+                    (ticket_id,),
+                )
+
+                return cursor.fetchone()
 
     def upsert_embedding(
         self,
@@ -62,7 +92,11 @@ class EmbeddingRepository:
 
         with PostgresDB.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(query, (ticket_id,))
+                cursor.execute(
+                    query,
+                    (ticket_id,),
+                )
+
                 row = cursor.fetchone()
 
         if row is None:
@@ -72,29 +106,36 @@ class EmbeddingRepository:
 
     def search_similar(
         self,
+        ticket_id,
         embedding,
         limit=5,
     ):
         """
-        Find the most similar tickets using pgvector cosine distance.
+        Find the most similar tickets using pgvector cosine similarity.
         """
 
         query = """
         SELECT
-            ticket_id,
-            model_name,
-            1 - (embedding <=> %s) AS similarity
-        FROM ticket_embeddings
-        ORDER BY embedding <=> %s
+            t.id AS ticket_id,
+            t.title,
+            1 - (e.embedding <=> %s) AS similarity
+        FROM ticket_embeddings e
+        INNER JOIN tickets t
+            ON t.id = e.ticket_id
+        WHERE e.ticket_id <> %s
+        ORDER BY e.embedding <=> %s
         LIMIT %s;
         """
 
         with PostgresDB.get_connection() as conn:
-            with conn.cursor(row_factory=psycopg.rows.dict_row) as cursor:
+            with conn.cursor(
+                row_factory=psycopg.rows.dict_row,
+            ) as cursor:
                 cursor.execute(
                     query,
                     (
                         embedding,
+                        ticket_id,
                         embedding,
                         limit,
                     ),
@@ -119,4 +160,7 @@ class EmbeddingRepository:
 
         with PostgresDB.get_connection() as conn:
             with conn.cursor() as cursor:
-                cursor.execute(query, (ticket_id,))
+                cursor.execute(
+                    query,
+                    (ticket_id,),
+                )

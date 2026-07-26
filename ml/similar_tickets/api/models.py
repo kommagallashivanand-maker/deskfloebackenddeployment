@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 class SimilarTicket(BaseModel):
     ticket_id: str
+    title: str
     similarity: float
 
 

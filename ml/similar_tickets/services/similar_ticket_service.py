@@ -8,7 +8,9 @@ from ml.similar_tickets.repository.embedding_repository import EmbeddingReposito
 
 
 class SimilarTicketService:
-    """Coordinates embedding generation and similarity search."""
+    """
+    Coordinates embedding generation and similarity search.
+    """
 
     def __init__(self):
         self.embedding_service = EmbeddingService()
@@ -17,13 +19,23 @@ class SimilarTicketService:
     def index_ticket(
         self,
         ticket_id: str,
-        text: str,
     ):
         """
-        Generate and store an embedding.
+        Generate and store an embedding for a ticket.
         """
 
-        embedding = self.embedding_service.generate_embedding(text)
+        ticket = self.repository.get_ticket(ticket_id)
+
+        if ticket is None:
+            raise ValueError(
+                f"Ticket '{ticket_id}' not found."
+            )
+
+        text = f"{ticket['title']}\n{ticket['description']}"
+
+        embedding = self.embedding_service.generate_embedding(
+            text
+        )
 
         self.repository.upsert_embedding(
             ticket_id=ticket_id,
@@ -40,7 +52,9 @@ class SimilarTicketService:
         Retrieve similar tickets.
         """
 
-        embedding = self.repository.get_embedding(ticket_id)
+        embedding = self.repository.get_embedding(
+            ticket_id
+        )
 
         if embedding is None:
             raise ValueError(
@@ -48,12 +62,19 @@ class SimilarTicketService:
             )
 
         return self.repository.search_similar(
-            embedding,
-            limit,
+            ticket_id=ticket_id,
+            embedding=embedding,
+            limit=limit,
         )
 
     def delete_ticket_embedding(
         self,
         ticket_id: str,
     ):
-        self.repository.delete_embedding(ticket_id)
+        """
+        Delete a stored embedding.
+        """
+
+        self.repository.delete_embedding(
+            ticket_id
+        )

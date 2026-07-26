@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.core.config import settings
+from ml.ml_service.app.core.config import settings
 
 router = APIRouter()
 

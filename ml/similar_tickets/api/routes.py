@@ -8,7 +8,9 @@ from ml.similar_tickets.api.models import (
     SimilarTicket,
     SimilarTicketsResponse,
 )
-from ml.similar_tickets.services.similar_ticket_service import SimilarTicketService
+from ml.similar_tickets.services.similar_ticket_service import (
+    SimilarTicketService,
+)
 
 router = APIRouter(
     prefix="/similar-tickets",
@@ -26,6 +28,10 @@ def get_similar_tickets(
     ticket_id: str,
     limit: int = 5,
 ):
+    """
+    Retrieve the most similar tickets for a given ticket.
+    """
+
     try:
         results = service.get_similar_tickets(
             ticket_id=ticket_id,
@@ -34,11 +40,11 @@ def get_similar_tickets(
 
         similar_tickets = [
             SimilarTicket(
-                ticket_id=row[0],
-                similarity=row[2],
+                ticket_id=row["ticket_id"],
+                title=row["title"],
+                similarity=row["similarity"],
             )
             for row in results
-            if row[0] != ticket_id
         ]
 
         return SimilarTicketsResponse(
