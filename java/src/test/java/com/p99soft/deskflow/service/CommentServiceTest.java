@@ -24,6 +24,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
+import com.p99soft.deskflow.event.TicketEventPublisher;
+
 @ExtendWith(MockitoExtension.class)
 class CommentServiceTest {
 
@@ -35,6 +37,8 @@ class CommentServiceTest {
     private UserRepository userRepository;
     @Mock
     private ActivityService activityService;
+    @Mock
+    private TicketEventPublisher ticketEventPublisher;
 
     @InjectMocks
     private CommentServiceImpl commentService;

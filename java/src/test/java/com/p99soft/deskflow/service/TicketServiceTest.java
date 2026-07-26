@@ -15,6 +15,7 @@ import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
 import com.p99soft.deskflow.service.Impl.TicketServiceImpl;
+import com.p99soft.deskflow.event.TicketEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -52,6 +53,8 @@ class TicketServiceTest {
     private StorageService storageService;
     @Mock
     private ActivityService activityService;
+    @Mock
+    private TicketEventPublisher ticketEventPublisher;
 
     private com.p99soft.deskflow.mapper.TicketMapper ticketMapper;
     private TicketServiceImpl ticketService;
@@ -69,7 +72,16 @@ class TicketServiceTest {
     @BeforeEach
     void setUp() {
         ticketMapper = new com.p99soft.deskflow.mapper.TicketMapper(slaPolicyRepository, storageService);
-        ticketService = new TicketServiceImpl(ticketRepository, userRepository, categoryRepository, ticketMapper, storageService, activityService);
+        ticketService = new TicketServiceImpl(
+                ticketRepository,
+                userRepository,
+                categoryRepository,
+                ticketMapper,
+                storageService,
+                activityService,
+                ticketEventPublisher,
+                slaPolicyRepository
+        );
 
         ticketId = UUID.randomUUID();
         creatorId = UUID.randomUUID();
@@ -472,9 +484,6 @@ class TicketServiceTest {
                 .assignedTo(assigneeId)
                 .build();
 
-        ticket.setAssignedTo(assignee);
-        ticket.setFirstRespondedAt(TEST_TIME);
-
         when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
         when(userRepository.findById(assigneeId)).thenReturn(Optional.of(assignee));
         when(ticketRepository.save(any(Ticket.class))).thenReturn(ticket);
@@ -484,6 +493,8 @@ class TicketServiceTest {
         assertNotNull(response);
         assertEquals(assigneeId, response.getAssignedTo());
         assertNotNull(response.getFirstRespondedAt());
+
+        verify(ticketEventPublisher).publishFirstResponse(eq(ticket), eq(assigneeId), any(LocalDateTime.class));
     }
 
     @Test
