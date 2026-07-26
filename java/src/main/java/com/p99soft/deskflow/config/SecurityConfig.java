@@ -33,17 +33,17 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
  * ┌────────────────────────────────────────┬──────────┬───────┬───────┐
  * │ Endpoint                               │ EMPLOYEE │ AGENT │ ADMIN │
  * ├────────────────────────────────────────┼──────────┼───────┼───────┤
- * │ POST   /api/v1/auth/login              │    ✅    │  ✅   │  ✅   │ (public)
- * │ POST   /api/v1/auth/register           │    ❌    │  ❌   │  ✅   │
+ * │ POST   /api/v1/auth/login              │    :white_check_mark:    │  :white_check_mark:   │  :white_check_mark:   │ (public)
+ * │ POST   /api/v1/auth/register           │    :x:    │  :x:   │  :white_check_mark:   │
  * ├────────────────────────────────────────┼──────────┼───────┼───────┤
- * │ POST   /api/v1/tickets                 │    ✅    │  ❌   │  ❌   │ (create)
- * │ GET    /api/v1/tickets                 │    ✅    │  ✅   │  ✅   │ (list/view)
- * │ GET    /api/v1/tickets/{id}            │    ✅    │  ✅   │  ✅   │
- * │ PUT    /api/v1/tickets/{id}            │    ❌    │  ✅   │  ✅   │ (assign/update)
+ * │ POST   /api/v1/tickets                 │    :white_check_mark:    │  :x:   │  :x:   │ (create)
+ * │ GET    /api/v1/tickets                 │    :white_check_mark:    │  :white_check_mark:   │  :white_check_mark:   │ (list/view)
+ * │ GET    /api/v1/tickets/{id}            │    :white_check_mark:    │  :white_check_mark:   │  :white_check_mark:   │
+ * │ PUT    /api/v1/tickets/{id}            │    :x:    │  :white_check_mark:   │  :white_check_mark:   │ (assign/update)
  * ├────────────────────────────────────────┼──────────┼───────┼───────┤
- * │ POST   /api/v1/tickets/{id}/comments   │    ✅    │  ✅   │  ✅   │
- * │ GET    /api/v1/tickets/{id}/comments   │    ✅    │  ✅   │  ✅   │
- * │ GET    /api/v1/tickets/{id}/activities │    ✅    │  ✅   │  ✅   │
+ * │ POST   /api/v1/tickets/{id}/comments   │    :white_check_mark:    │  :white_check_mark:   │  :white_check_mark:   │
+ * │ GET    /api/v1/tickets/{id}/comments   │    :white_check_mark:    │  :white_check_mark:   │  :white_check_mark:   │
+ * │ GET    /api/v1/tickets/{id}/activities │    :white_check_mark:    │  :white_check_mark:   │  :white_check_mark:   │
  * └────────────────────────────────────────┴──────────┴───────┴───────┘
  * </pre>
  *
@@ -135,7 +135,8 @@ public class SecurityConfig {
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs/**",
-                                "/actuator/health"
+                                "/actuator/health",
+                                "/error"
                         ).permitAll()
 
                         // ── Auth — ADMIN only ──────────────────────────────────────

@@ -7,6 +7,7 @@ import com.p99soft.deskflow.dto.TicketRequest;
 import com.p99soft.deskflow.dto.TicketResponse;
 import com.p99soft.deskflow.enums.Priority;
 import com.p99soft.deskflow.enums.Status;
+import com.p99soft.deskflow.security.UserDetailsImpl;
 import com.p99soft.deskflow.service.TicketService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -27,7 +28,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import com.p99soft.deskflow.security.UserDetailsImpl;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -43,6 +43,13 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+/**
+ * REST controller for ticket management.
+ *
+ * <p>The authenticated user's identity is resolved from the JWT via
+ * {@link AuthenticationPrincipal} — the frontend never needs to pass
+ * {@code createdBy} or user context manually.</p>
+ */
 @RestController
 @RequestMapping("/api/v1/tickets")
 @RequiredArgsConstructor
@@ -52,162 +59,169 @@ import java.util.UUID;
 public class TicketController {
 
     private final TicketService ticketService;
-    private final ObjectMapper objectMapper = new ObjectMapper()
+    private final ObjectMapper  objectMapper = new ObjectMapper()
             .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
-    private final Validator validator = jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
+    private final Validator validator =
+            jakarta.validation.Validation.buildDefaultValidatorFactory().getValidator();
 
+    // ------------------------------------------------------------------ //
+    // Create
+    // ------------------------------------------------------------------ //
+
+    /**
+     * EMPLOYEE only. {@code createdBy} is resolved from the JWT — not required in the request body.
+     */
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasRole('EMPLOYEE')")
     @Operation(
         summary = "Create a new ticket (JSON)",
-        description = "Creates a ticket. Allowed for EMPLOYEE only."
+        description = "Creates a ticket. EMPLOYEE only. The creator is resolved automatically from the JWT."
     )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "201", description = "Ticket successfully created",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TicketResponse.class))),
+    @ApiResponses({
+        @ApiResponse(responseCode = "201", description = "Ticket created",
+            content = @Content(schema = @Schema(implementation = TicketResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Validation failed",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Missing or invalid JWT",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "Insufficient role — only EMPLOYEE can create tickets",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
-        @ApiResponse(responseCode = "400", description = "Invalid request payload",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "Insufficient role",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class)))
     })
-    public ResponseEntity<TicketResponse> createTicket(@RequestBody @Valid TicketRequest request) {
-        log.info("REST request to create ticket (JSON): {}", request.getTitle());
-        return new ResponseEntity<>(ticketService.createTicket(request), HttpStatus.CREATED);
+    public ResponseEntity<TicketResponse> createTicket(
+            @RequestBody @Valid TicketRequest request,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        log.info("Create ticket (JSON): title={}, creatorId={}", request.getTitle(), principal.getId());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ticketService.createTicket(request, principal.getId()));
     }
 
     /**
-     * Only EMPLOYEE can create tickets with attachments.
+     * EMPLOYEE only. Multipart variant with file attachments.
      */
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasRole('EMPLOYEE')")
     @Operation(
         summary = "Create a new ticket with attachments (Multipart)",
-        description = "Creates a ticket with file attachments. Allowed for EMPLOYEE only."
+        description = "Creates a ticket with file attachments. EMPLOYEE only."
     )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "201", description = "Ticket and attachments successfully created",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TicketResponse.class))),
+    @ApiResponses({
+        @ApiResponse(responseCode = "201", description = "Ticket and attachments created",
+            content = @Content(schema = @Schema(implementation = TicketResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Validation failed",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "401", description = "Missing or invalid JWT",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "403", description = "Insufficient role",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
-        @ApiResponse(responseCode = "400", description = "Invalid request payload",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class)))
     })
     public ResponseEntity<TicketResponse> createTicketMultipart(
             @RequestPart("ticket") String ticketJson,
-            @RequestPart(value = "files", required = false) List<MultipartFile> files) throws Exception {
-        log.info("REST request to create ticket (Multipart): filesCount={}", files != null ? files.size() : 0);
+            @RequestPart(value = "files", required = false) List<MultipartFile> files,
+            @AuthenticationPrincipal UserDetailsImpl principal) throws Exception {
+        log.info("Create ticket (Multipart): filesCount={}, creatorId={}",
+                files != null ? files.size() : 0, principal.getId());
 
         TicketRequest request = objectMapper.readValue(ticketJson, TicketRequest.class);
         Set<ConstraintViolation<TicketRequest>> violations = validator.validate(request);
-        if (!violations.isEmpty()) {
-            throw new ConstraintViolationException(violations);
-        }
-        return new ResponseEntity<>(ticketService.createTicket(request, files), HttpStatus.CREATED);
+        if (!violations.isEmpty()) throw new ConstraintViolationException(violations);
+
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ticketService.createTicket(request, principal.getId(), files));
     }
 
+    // ------------------------------------------------------------------ //
+    // Read
+    // ------------------------------------------------------------------ //
+
     /**
-     * All authenticated users can view a ticket.
+     * All roles. EMPLOYEE can only view tickets they created.
      */
     @GetMapping("/{id}")
     @PreAuthorize("hasAnyRole('EMPLOYEE', 'AGENT', 'ADMIN')")
     @Operation(
         summary = "Get a ticket by ID",
-        description = "Retrieves full details of a ticket. Accessible by all roles."
+        description = "Retrieves a ticket. EMPLOYEE can only view their own tickets."
     )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Ticket details successfully retrieved",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TicketResponse.class))),
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Ticket retrieved",
+            content = @Content(schema = @Schema(implementation = TicketResponse.class))),
         @ApiResponse(responseCode = "401", description = "Missing or invalid JWT",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "EMPLOYEE accessing another employee's ticket",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
         @ApiResponse(responseCode = "404", description = "Ticket not found",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class)))
     })
     public ResponseEntity<TicketResponse> getTicketById(
-            @Parameter(description = "UUID of the ticket to retrieve", required = true)
-            @PathVariable UUID id) {
-        log.info("REST request to get ticket by ID: {}", id);
-        return ResponseEntity.ok(ticketService.getTicketById(id));
-    }
-
-    /**
-     * AGENT and ADMIN can update tickets (reassign, change status, etc.).
-     * EMPLOYEE cannot modify ticket details after creation.
-     */
-    @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('AGENT', 'ADMIN')")
-    @Operation(
-        summary = "Update an existing ticket",
-        description = "Updates ticket fields. Allowed for AGENT and ADMIN only. " +
-                      "EMPLOYEEs cannot modify tickets after creation."
-    )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Ticket successfully updated",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = TicketResponse.class))),
-        @ApiResponse(responseCode = "401", description = "Missing or invalid JWT",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
-        @ApiResponse(responseCode = "403", description = "Insufficient role — EMPLOYEE cannot update tickets",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class))),
-        @ApiResponse(responseCode = "404", description = "Ticket, Category, or Assignee not found",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
-    })
-    public ResponseEntity<TicketResponse> updateTicket(
-            @Parameter(description = "UUID of the ticket to update", required = true)
             @PathVariable UUID id,
-            @RequestBody TicketRequest request) {
-        log.info("REST request to update ticket ID: {}", id);
-        return ResponseEntity.ok(ticketService.updateTicket(id, request));
+            @AuthenticationPrincipal UserDetailsImpl principal) {
+        log.info("Get ticket id={} by userId={}", id, principal.getId());
+        return ResponseEntity.ok(
+                ticketService.getTicketById(id, principal.getId(), principal.getUser().getRole()));
     }
 
     /**
-     * All authenticated users can list and filter tickets.
+     * All roles. EMPLOYEE sees only their own tickets; AGENT and ADMIN see all.
      */
     @GetMapping
     @PreAuthorize("hasAnyRole('EMPLOYEE', 'AGENT', 'ADMIN')")
     @Operation(
         summary = "List tickets with pagination and filtering",
-        description = "Returns a paginated list of tickets. Accessible by all roles."
+        description = "EMPLOYEE sees only their own tickets. AGENT and ADMIN see all tickets."
     )
-    @ApiResponses(value = {
-        @ApiResponse(responseCode = "200", description = "Successfully retrieved list of tickets",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = PageResponse.class))),
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Tickets retrieved",
+            content = @Content(schema = @Schema(implementation = PageResponse.class))),
         @ApiResponse(responseCode = "401", description = "Missing or invalid JWT",
-            content = @Content(mediaType = "application/json", schema = @Schema(implementation = ApiErrorResponse.class)))
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class)))
     })
     public ResponseEntity<PageResponse<TicketResponse>> listTickets(
-            @Parameter(description = "Zero-indexed page number", example = "0")
-            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Zero-indexed page number") @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Records per page")         @RequestParam(defaultValue = "10") int size,
+            @Parameter(description = "Filter by status")         @RequestParam(required = false) Status status,
+            @Parameter(description = "Filter by priority")       @RequestParam(required = false) Priority priority,
+            @Parameter(description = "Filter by category UUID")  @RequestParam(name = "category", required = false) UUID categoryId,
+            @Parameter(description = "Filter by assignee UUID")  @RequestParam(name = "assignee", required = false) UUID assignedTo,
+            @Parameter(description = "Free-text search")         @RequestParam(required = false) String search,
+            @Parameter(description = "Sort field")               @RequestParam(defaultValue = "createdAt") String sortBy,
+            @Parameter(description = "Sort direction: asc|desc") @RequestParam(defaultValue = "desc") String sortDir,
+            @AuthenticationPrincipal UserDetailsImpl principal) {
 
-            @Parameter(description = "Records per page", example = "10")
-            @RequestParam(defaultValue = "10") int size,
+        log.info("List tickets: page={}, size={}, status={}, role={}", page, size, status, principal.getUser().getRole());
+        return ResponseEntity.ok(ticketService.listTickets(
+                page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir,
+                principal.getId(), principal.getUser().getRole()));
+    }
 
-            @Parameter(description = "Filter by status")
-            @RequestParam(required = false) Status status,
+    // ------------------------------------------------------------------ //
+    // Update
+    // ------------------------------------------------------------------ //
 
-            @Parameter(description = "Filter by priority")
-            @RequestParam(required = false) Priority priority,
-
-            @Parameter(description = "Filter by Category UUID")
-            @RequestParam(name = "category", required = false) UUID categoryId,
-
-            @Parameter(description = "Filter by Assignee UUID")
-            @RequestParam(name = "assignee", required = false) UUID assignedTo,
-
-            @Parameter(description = "Free-text search across number, title, description")
-            @RequestParam(required = false) String search,
-
-            @Parameter(description = "Sort field", example = "createdAt")
-            @RequestParam(defaultValue = "createdAt") String sortBy,
-
-            @Parameter(description = "Sort direction: asc or desc", example = "desc")
-            @RequestParam(defaultValue = "desc") String sortDir) {
-
-        log.info("REST request to list tickets: page={}, size={}, status={}, priority={}", page, size, status, priority);
-        return ResponseEntity.ok(
-                ticketService.listTickets(page, size, status, priority, categoryId, assignedTo, search, sortBy, sortDir)
-        );
+    /**
+     * AGENT and ADMIN only.
+     */
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('AGENT', 'ADMIN')")
+    @Operation(
+        summary = "Update an existing ticket",
+        description = "AGENT and ADMIN only. EMPLOYEE cannot modify tickets after creation."
+    )
+    @ApiResponses({
+        @ApiResponse(responseCode = "200", description = "Ticket updated",
+            content = @Content(schema = @Schema(implementation = TicketResponse.class))),
+        @ApiResponse(responseCode = "400", description = "Invalid status transition or validation error",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "401", description = "Missing or invalid JWT",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "403", description = "EMPLOYEE cannot update tickets",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class))),
+        @ApiResponse(responseCode = "404", description = "Ticket, Category, or Assignee not found",
+            content = @Content(schema = @Schema(implementation = ApiErrorResponse.class)))
+    })
+    public ResponseEntity<TicketResponse> updateTicket(
+            @PathVariable UUID id,
+            @RequestBody TicketRequest request) {
+        log.info("Update ticket id={}", id);
+        return ResponseEntity.ok(ticketService.updateTicket(id, request));
     }
 }

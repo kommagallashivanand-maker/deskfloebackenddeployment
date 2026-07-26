@@ -131,8 +131,9 @@ com.p99soft.deskflow/
 | `POST /api/v1/auth/login` | ✅ | ✅ | ✅ |
 | `POST /api/v1/auth/register` | ❌ 403 | ❌ 403 | ✅ |
 | `POST /api/v1/tickets` | ✅ | ❌ 403 | ❌ 403 |
-| `GET /api/v1/tickets` | ✅ | ✅ | ✅ |
-| `GET /api/v1/tickets/{id}` | ✅ | ✅ | ✅ |
+| `GET /api/v1/tickets` | ✅ own only | ✅ | ✅ |
+| `GET /api/v1/tickets/{id}` | ✅ own only | ✅ | ✅ |
+| `GET /api/v1/categories` | ✅ | ✅ | ✅ |
 | `PUT /api/v1/tickets/{id}` | ❌ 403 | ✅ | ✅ |
 | `POST /api/v1/tickets/{id}/comments` | ✅ | ✅ | ✅ |
 | `GET /api/v1/tickets/{id}/comments` | ✅ | ✅ | ✅ |
@@ -517,11 +518,11 @@ Content-Type: application/json
   "description": "<ticket-description>",
   "priority": "<LOW|MEDIUM|HIGH|URGENT>",
   "categoryId": "<category-uuid>",
-  "createdBy": "<employee-user-uuid>",
   "assignedTo": "<agent-user-uuid>"
 }
 ```
-> `priority`, `status`, and `assignedTo` are optional. `title`, `categoryId`, and `createdBy` are required.
+> `priority`, `status`, and `assignedTo` are optional. `title` and `categoryId` are required.  
+> **`createdBy` is NOT included in the request body.** The creator is resolved automatically from the authenticated JWT on the server side.
 
 **Response `201 Created`:** `TicketResponse`
 
@@ -548,11 +549,12 @@ Part "ticket" (application/json):
   "title": "<ticket-title>",
   "description": "<ticket-description>",
   "priority": "<LOW|MEDIUM|HIGH|URGENT>",
-  "categoryId": "<category-uuid>",
-  "createdBy": "<employee-user-uuid>"
+  "categoryId": "<category-uuid>"
 }
 
 Part "files": <file1>, <file2>, ...
+```
+> **`createdBy` is NOT included in the request body.** The creator is resolved from the authenticated JWT.
 ```
 
 **Response `201 Created`:** `TicketResponse` with presigned attachment URLs
@@ -567,6 +569,8 @@ Part "files": <file1>, <file2>, ...
 #### GET `/api/v1/tickets`
 **Auth required:** Yes  
 **Roles:** EMPLOYEE, AGENT, ADMIN
+
+> **Note:** EMPLOYEE sees only their own tickets. AGENT and ADMIN see all tickets.
 
 **Request:**
 ```http
@@ -609,6 +613,8 @@ Authorization: Bearer <jwt-token>
 **Auth required:** Yes  
 **Roles:** EMPLOYEE, AGENT, ADMIN
 
+> **Note:** EMPLOYEE can only view tickets they created. Returns 403 if accessing another employee's ticket.
+
 **Request:**
 ```http
 GET /api/v1/tickets/<ticket-uuid>
@@ -619,6 +625,7 @@ Authorization: Bearer <jwt-token>
 
 **Error responses:**
 - `401` — missing or invalid JWT
+- `403` — EMPLOYEE accessing a ticket they did not create
 - `404` — ticket not found
 
 ---
@@ -728,6 +735,38 @@ Authorization: Bearer <jwt-token>
 ```
 
 **Response `200 OK`:** List of `ActivityResponse` (chronological audit log of all state transitions)
+
+**Error responses:**
+- `401` — missing or invalid JWT
+
+---
+
+### Category Endpoints
+
+---
+
+#### GET `/api/v1/categories`
+**Auth required:** Yes
+**Roles:** EMPLOYEE, AGENT, ADMIN
+
+**Request:**
+```http
+GET /api/v1/categories
+Authorization: Bearer <jwt-token>
+```
+
+**Response `200 OK`:** List of all categories
+```json
+[
+  {
+    "id": "<category-uuid>",
+    "name": "<TECHNICAL|BILLING|ACCOUNT_ACCESS|FEATURE_REQUEST|GENERAL>",
+    "description": "<category-description>"
+  }
+]
+```
+
+> Use the returned `id` value as `categoryId` when creating a ticket via `POST /api/v1/tickets`.
 
 **Error responses:**
 - `401` — missing or invalid JWT
@@ -844,9 +883,13 @@ CORS is registered in `SecurityConfig` via `CorsConfigurationSource` bean and ap
 | EMPLOYEE creates ticket | POST | `/api/v1/tickets` | EMPLOYEE token | `201` |
 | AGENT creates ticket (blocked) | POST | `/api/v1/tickets` | AGENT token | `403` |
 | ADMIN creates ticket (blocked) | POST | `/api/v1/tickets` | ADMIN token | `403` |
+| EMPLOYEE views own ticket | GET | `/api/v1/tickets/{id}` | EMPLOYEE token | `200` |
+| EMPLOYEE views other's ticket (blocked) | GET | `/api/v1/tickets/{id}` | EMPLOYEE token | `403` |
 | AGENT updates ticket | PUT | `/api/v1/tickets/{id}` | AGENT token | `200` |
 | EMPLOYEE updates ticket (blocked) | PUT | `/api/v1/tickets/{id}` | EMPLOYEE token | `403` |
-| Anyone views tickets | GET | `/api/v1/tickets` | any token | `200` |
+| EMPLOYEE lists tickets (own only) | GET | `/api/v1/tickets` | EMPLOYEE token | `200` (filtered) |
+| AGENT lists all tickets | GET | `/api/v1/tickets` | AGENT token | `200` (all) |
+| Get categories | GET | `/api/v1/categories` | any token | `200` |
 | No token on protected endpoint | GET | `/api/v1/tickets` | none | `401` |
 | Expired/malformed token | GET | `/api/v1/tickets` | bad token | `401` |
 

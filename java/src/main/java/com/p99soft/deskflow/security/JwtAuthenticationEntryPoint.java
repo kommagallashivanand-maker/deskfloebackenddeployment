@@ -36,7 +36,7 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
                 response,
                 HttpStatus.UNAUTHORIZED.value(),
                 HttpStatus.UNAUTHORIZED.getReasonPhrase(),
-                resolveMessage(request),
+                resolveMessage(request, authException),
                 request.getRequestURI()
         );
     }
@@ -45,7 +45,10 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
      * Provides a context-specific 401 message based on what was wrong
      * with the Authorization header.
      */
-    private String resolveMessage(HttpServletRequest request) {
+    private String resolveMessage(HttpServletRequest request, AuthenticationException authException) {
+        if (request.getRequestURI().endsWith("/login")) {
+            return authException.getMessage();
+        }
         String authHeader = request.getHeader("Authorization");
         if (authHeader == null) {
             return "Access denied: Authorization header is missing";

@@ -44,7 +44,6 @@ public class TicketRequest {
     @Schema(description = "UUID of the category this ticket belongs to")
     private UUID categoryId;
 
-    @NotNull(message = "Creator ID is required")
-    @Schema(description = "UUID of the user raising this ticket")
-    private UUID createdBy;
+    // createdBy is NOT accepted from the client.
+    // It is resolved from the authenticated JWT in the controller and passed to the service.
 }
