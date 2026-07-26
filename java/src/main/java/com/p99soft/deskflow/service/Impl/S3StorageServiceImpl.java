@@ -75,7 +75,8 @@ public class S3StorageServiceImpl implements StorageService {
         try {
             java.net.URI uri = new java.net.URI(fileUrl);
             String path = uri.getPath();
-            // Remove the leading "/" to get the correct S3 key (e.g. "uploads/filename.png")
+            // Remove the leading "/" to get the correct S3 key (e.g.
+            // "uploads/filename.png")
             String objectKey = path.startsWith("/") ? path.substring(1) : path;
 
             GetObjectRequest getObjectRequest = GetObjectRequest.builder()
