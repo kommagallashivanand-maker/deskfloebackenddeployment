@@ -16,9 +16,12 @@ import com.p99soft.deskflow.mapper.TicketMapper;
 import com.p99soft.deskflow.repository.CategoryRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
-import com.p99soft.deskflow.service.ActivityService;
-import com.p99soft.deskflow.service.StorageService;
+import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.service.TicketService;
+import com.p99soft.deskflow.entity.SlaPolicy;
+import com.p99soft.deskflow.service.StorageService;
+import com.p99soft.deskflow.event.TicketEventPublisher;
+import com.p99soft.deskflow.service.ActivityService;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,6 +56,8 @@ public class TicketServiceImpl implements TicketService {
     private final TicketMapper      ticketMapper;
     private final StorageService    storageService;
     private final ActivityService   activityService;
+    private final TicketEventPublisher ticketEventPublisher;
+    private final SlaPolicyRepository slaPolicyRepository;
 
     /** Valid status transitions enforced by the state machine. */
     private static final Map<Status, Set<Status>> ALLOWED_TRANSITIONS = Map.of(
@@ -113,6 +118,17 @@ public class TicketServiceImpl implements TicketService {
 
         Ticket saved = ticketRepository.save(ticket);
         log.info("Ticket created: id={}, ticketNumber={}", saved.getId(), saved.getTicketNumber());
+
+        SlaPolicy slaPolicy = slaPolicyRepository.findByPriority(priority).orElse(null);
+        int responseHours = slaPolicy != null ? slaPolicy.getResponseTimeHours() : 24;
+        int resolutionHours = slaPolicy != null ? slaPolicy.getResolutionTimeHours() : 120;
+        ticketEventPublisher.publishTicketCreated(saved, responseHours, resolutionHours);
+
+        if (assignee != null) {
+            ticketEventPublisher.publishAssigned(saved, assignee.getId(), creator.getId());
+            ticketEventPublisher.publishFirstResponse(saved, assignee.getId(), saved.getFirstRespondedAt());
+        }
+
         return ticketMapper.mapToResponse(saved);
     }
 
@@ -134,6 +150,112 @@ public class TicketServiceImpl implements TicketService {
         }
 
         return ticketMapper.mapToResponse(ticket);
+    }
+
+    @Override
+    @Transactional
+    public TicketResponse updateTicket(UUID id, TicketRequest request) {
+        log.info("Updating ticket ID: {}", id);
+        Ticket ticket = ticketRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Ticket not found with id: " + id));
+
+        handleStatusTransition(ticket, request.getStatus());
+
+        if (request.getTitle() != null) {
+            ticket.setTitle(request.getTitle());
+        }
+        if (request.getDescription() != null) {
+            ticket.setDescription(request.getDescription());
+        }
+        if (request.getPriority() != null) {
+            ticket.setPriority(request.getPriority());
+        }
+
+        updateCategory(ticket, request.getCategoryId());
+        updateAssignee(ticket, request.getAssignedTo());
+
+        Ticket updatedTicket = ticketRepository.save(ticket);
+        log.info("Ticket updated successfully: id={}", updatedTicket.getId());
+        return ticketMapper.mapToResponse(updatedTicket);
+    }
+
+    private void handleStatusTransition(Ticket ticket, Status newStatus) {
+        Status oldStatus = ticket.getStatus();
+        if (newStatus == null || newStatus == oldStatus) {
+            return;
+        }
+
+        Set<Status> allowed = ALLOWED_TRANSITIONS.getOrDefault(oldStatus, Set.of());
+        if (!allowed.contains(newStatus)) {
+            log.error("Invalid status transition attempted from {} to {} for ticket ID: {}", oldStatus, newStatus, ticket.getId());
+            throw new InvalidStatusTransitionException("Invalid status transition from " + oldStatus + " to " + newStatus);
+        }
+
+        boolean isReopen = false;
+        // Reopen validation: Transition from RESOLVED/CLOSED back to OPEN/IN_PROGRESS
+        if ((oldStatus == Status.RESOLVED || oldStatus == Status.CLOSED) &&
+                (newStatus == Status.OPEN || newStatus == Status.IN_PROGRESS)) {
+            log.info("Ticket reopened: incrementing reopen count for ticket ID: {}", ticket.getId());
+            ticket.setReopenCount(ticket.getReopenCount() + 1);
+            isReopen = true;
+        }
+
+        ticket.setStatus(newStatus);
+
+        // Handle resolution/close timestamps
+        if (newStatus == Status.RESOLVED) {
+            ticket.setResolvedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+        } else if (newStatus == Status.CLOSED) {
+            ticket.setClosedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+        }
+
+        // Log audit activity
+        activityService.logActivity(ticket, ticket.getCreatedBy(), "STATUS_TRANSITION", oldStatus.name(), newStatus.name());
+
+        UUID actorId = ticket.getCreatedBy() != null ? ticket.getCreatedBy().getId() : null;
+        ticketEventPublisher.publishStatusChanged(ticket, oldStatus, newStatus, actorId);
+
+        if (newStatus == Status.RESOLVED) {
+            ticketEventPublisher.publishResolved(ticket, actorId);
+        }
+
+        if (isReopen) {
+            ticketEventPublisher.publishTicketReopened(ticket, actorId, ticket.getReopenCount());
+        }
+    }
+
+    private void updateCategory(Ticket ticket, UUID categoryId) {
+        if (categoryId != null) {
+            Category category = categoryRepository.findById(categoryId)
+                    .orElseThrow(() -> new ResourceNotFoundException(
+                            "Category not found with id: " + categoryId));
+            ticket.setCategory(category);
+        }
+    }
+
+    private void updateAssignee(Ticket ticket, UUID assignedTo) {
+        if (assignedTo != null) {
+            User currentAssignee = ticket.getAssignedTo();
+            if (currentAssignee == null || !currentAssignee.getId().equals(assignedTo)) {
+                User assignee = userRepository.findById(assignedTo)
+                        .orElseThrow(() -> new ResourceNotFoundException(
+                                "Assignee User not found with id: " + assignedTo));
+
+                // Set first response timestamp if it's the first time an assignee is set
+                boolean isFirstResponseSet = false;
+                if (ticket.getAssignedTo() == null && ticket.getFirstRespondedAt() == null) {
+                    ticket.setFirstRespondedAt(LocalDateTime.now(java.time.ZoneId.systemDefault()));
+                    isFirstResponseSet = true;
+                }
+                ticket.setAssignedTo(assignee);
+
+                UUID assignedBy = ticket.getCreatedBy() != null ? ticket.getCreatedBy().getId() : null;
+                ticketEventPublisher.publishAssigned(ticket, assignedTo, assignedBy);
+                if (isFirstResponseSet) {
+                    ticketEventPublisher.publishFirstResponse(ticket, assignedTo, ticket.getFirstRespondedAt());
+                }
+            }
+        }
     }
 
     @Override
@@ -174,30 +296,7 @@ public class TicketServiceImpl implements TicketService {
                 .build();
     }
 
-    // ------------------------------------------------------------------ //
-    // Update
-    // ------------------------------------------------------------------ //
 
-    @Override
-    @Transactional
-    public TicketResponse updateTicket(UUID id, TicketRequest request) {
-        log.info("Updating ticket id={}", id);
-        Ticket ticket = ticketRepository.findById(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Ticket not found with id: " + id));
-
-        handleStatusTransition(ticket, request.getStatus());
-
-        if (request.getTitle()       != null) ticket.setTitle(request.getTitle());
-        if (request.getDescription() != null) ticket.setDescription(request.getDescription());
-        if (request.getPriority()    != null) ticket.setPriority(request.getPriority());
-
-        updateCategory(ticket, request.getCategoryId());
-        updateAssignee(ticket, request.getAssignedTo());
-
-        Ticket updated = ticketRepository.save(ticket);
-        log.info("Ticket updated: id={}", updated.getId());
-        return ticketMapper.mapToResponse(updated);
-    }
 
     // ------------------------------------------------------------------ //
     // Private — specification builder
@@ -239,36 +338,7 @@ public class TicketServiceImpl implements TicketService {
         };
     }
 
-    // ------------------------------------------------------------------ //
-    // Private — state machine
-    // ------------------------------------------------------------------ //
 
-    private void handleStatusTransition(Ticket ticket, Status newStatus) {
-        Status oldStatus = ticket.getStatus();
-        if (newStatus == null || newStatus == oldStatus) return;
-
-        Set<Status> allowed = ALLOWED_TRANSITIONS.getOrDefault(oldStatus, Set.of());
-        if (!allowed.contains(newStatus)) {
-            throw new InvalidStatusTransitionException(
-                    "Invalid status transition from " + oldStatus + " to " + newStatus);
-        }
-
-        if ((oldStatus == Status.RESOLVED || oldStatus == Status.CLOSED)
-                && (newStatus == Status.OPEN || newStatus == Status.IN_PROGRESS)) {
-            ticket.setReopenCount(ticket.getReopenCount() + 1);
-        }
-
-        ticket.setStatus(newStatus);
-
-        if (newStatus == Status.RESOLVED) {
-            ticket.setResolvedAt(LocalDateTime.now(ZoneId.systemDefault()));
-        } else if (newStatus == Status.CLOSED) {
-            ticket.setClosedAt(LocalDateTime.now(ZoneId.systemDefault()));
-        }
-
-        activityService.logActivity(ticket, ticket.getCreatedBy(),
-                "STATUS_TRANSITION", oldStatus.name(), newStatus.name());
-    }
 
     // ------------------------------------------------------------------ //
     // Private — helpers
@@ -286,21 +356,7 @@ public class TicketServiceImpl implements TicketService {
                         "Category not found with id: " + categoryId));
     }
 
-    private void updateCategory(Ticket ticket, UUID categoryId) {
-        if (categoryId != null) {
-            ticket.setCategory(resolveCategory(categoryId));
-        }
-    }
 
-    private void updateAssignee(Ticket ticket, UUID assignedTo) {
-        if (assignedTo != null) {
-            User assignee = resolveUser(assignedTo, "Assignee");
-            if (ticket.getAssignedTo() == null && ticket.getFirstRespondedAt() == null) {
-                ticket.setFirstRespondedAt(LocalDateTime.now(ZoneId.systemDefault()));
-            }
-            ticket.setAssignedTo(assignee);
-        }
-    }
 
     private void processAttachments(Ticket ticket, List<MultipartFile> files) {
         if (files == null || files.isEmpty()) return;

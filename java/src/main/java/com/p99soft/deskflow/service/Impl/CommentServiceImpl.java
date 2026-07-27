@@ -11,11 +11,13 @@ import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
 import com.p99soft.deskflow.service.ActivityService;
 import com.p99soft.deskflow.service.CommentService;
+import com.p99soft.deskflow.event.TicketEventPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -32,6 +34,7 @@ public class CommentServiceImpl implements CommentService {
     private final TicketRepository ticketRepository;
     private final UserRepository userRepository;
     private final ActivityService activityService;
+    private final TicketEventPublisher ticketEventPublisher;
 
     private static final Pattern MENTION_PATTERN = Pattern.compile("@([a-zA-Z0-9._-]+)");
 
@@ -53,6 +56,8 @@ public class CommentServiceImpl implements CommentService {
                             "Parent comment not found with id: " + request.getParentCommentId()));
         }
 
+        boolean isFirstResponse = commentRepository.countByTicketId(ticketId) == 0;
+
         TicketComment comment = TicketComment.builder()
                 .ticket(ticket)
                 .user(user)
@@ -61,6 +66,14 @@ public class CommentServiceImpl implements CommentService {
                 .build();
 
         TicketComment savedComment = commentRepository.save(comment);
+
+        if (isFirstResponse) {
+            if (ticket.getFirstRespondedAt() == null) {
+                ticket.setFirstRespondedAt(savedComment.getCreatedAt() != null ? savedComment.getCreatedAt() : LocalDateTime.now(java.time.ZoneId.systemDefault()));
+                ticketRepository.save(ticket);
+            }
+            ticketEventPublisher.publishFirstResponse(ticket, user.getId(), ticket.getFirstRespondedAt());
+        }
 
         // Audit log comment addition
         activityService.logActivity(ticket, user, "COMMENT_ADDED", null, savedComment.getId().toString());

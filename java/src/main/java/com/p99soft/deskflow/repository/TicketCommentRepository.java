@@ -11,4 +11,5 @@ import java.util.UUID;
 public interface TicketCommentRepository extends JpaRepository<TicketComment, UUID> {
     List<TicketComment> findByTicketIdAndParentCommentIsNullOrderByCreatedAtAsc(UUID ticketId);
     List<TicketComment> findByTicketIdOrderByCreatedAtAsc(UUID ticketId);
+    long countByTicketId(UUID ticketId);
 }

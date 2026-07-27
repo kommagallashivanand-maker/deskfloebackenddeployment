@@ -28,6 +28,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
+import com.p99soft.deskflow.repository.SlaPolicyRepository;
+import com.p99soft.deskflow.event.TicketEventPublisher;
+
 @ExtendWith(MockitoExtension.class)
 class TicketStateMachineTest {
 
@@ -43,6 +46,10 @@ class TicketStateMachineTest {
     private StorageService storageService;
     @Mock
     private ActivityService activityService;
+    @Mock
+    private TicketEventPublisher ticketEventPublisher;
+    @Mock
+    private SlaPolicyRepository slaPolicyRepository;
 
     // Manually instantiated so we control all constructor arguments
     private TicketServiceImpl ticketService;
@@ -55,7 +62,8 @@ class TicketStateMachineTest {
     void setUp() {
         ticketService = new TicketServiceImpl(
                 ticketRepository, userRepository, categoryRepository,
-                ticketMapper, storageService, activityService);
+                ticketMapper, storageService, activityService,
+                ticketEventPublisher, slaPolicyRepository);
 
         ticketId = UUID.randomUUID();
         mockUser = User.builder()

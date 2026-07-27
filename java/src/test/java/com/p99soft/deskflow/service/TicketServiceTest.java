@@ -16,6 +16,7 @@ import com.p99soft.deskflow.repository.SlaPolicyRepository;
 import com.p99soft.deskflow.repository.TicketRepository;
 import com.p99soft.deskflow.repository.UserRepository;
 import com.p99soft.deskflow.service.Impl.TicketServiceImpl;
+import com.p99soft.deskflow.event.TicketEventPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -44,21 +45,29 @@ class TicketServiceTest {
 
     private static final LocalDateTime TEST_TIME = LocalDateTime.of(2026, 7, 21, 10, 0);
 
-    @Mock private TicketRepository   ticketRepository;
-    @Mock private UserRepository     userRepository;
-    @Mock private CategoryRepository categoryRepository;
-    @Mock private SlaPolicyRepository slaPolicyRepository;
-    @Mock private StorageService     storageService;
-    @Mock private ActivityService    activityService;
+    @Mock
+    private TicketRepository ticketRepository;
+    @Mock
+    private UserRepository userRepository;
+    @Mock
+    private CategoryRepository categoryRepository;
+    @Mock
+    private SlaPolicyRepository slaPolicyRepository;
+    @Mock
+    private StorageService storageService;
+    @Mock
+    private ActivityService activityService;
+    @Mock
+    private TicketEventPublisher ticketEventPublisher;
 
     private com.p99soft.deskflow.mapper.TicketMapper ticketMapper;
     private TicketServiceImpl ticketService;
 
-    private User    creator;
-    private User    assignee;
+    private User creator;
+    private User assignee;
     private Category category;
     private SlaPolicy slaPolicy;
-    private Ticket  ticket;
+    private Ticket ticket;
 
     private UUID ticketId;
     private UUID creatorId;
@@ -69,8 +78,15 @@ class TicketServiceTest {
     void setUp() {
         ticketMapper = new com.p99soft.deskflow.mapper.TicketMapper(slaPolicyRepository, storageService);
         ticketService = new TicketServiceImpl(
-                ticketRepository, userRepository, categoryRepository,
-                ticketMapper, storageService, activityService);
+                ticketRepository,
+                userRepository,
+                categoryRepository,
+                ticketMapper,
+                storageService,
+                activityService,
+                ticketEventPublisher,
+                slaPolicyRepository
+        );
 
         ticketId   = UUID.randomUUID();
         creatorId  = UUID.randomUUID();
@@ -350,7 +366,8 @@ class TicketServiceTest {
 
         assertNotNull(result);
         assertEquals(1, result.getContent().size());
-        // Spec is built with creator filter — validated indirectly through returned data
+        // Spec is built with creator filter — validated indirectly through returned
+        // data
         verify(ticketRepository).findAll(any(Specification.class), any(Pageable.class));
     }
 
@@ -514,9 +531,9 @@ class TicketServiceTest {
 
     @Test
     void testUpdateTicket_AssigneeUpdateSuccess() {
-        ticket.setAssignedTo(assignee);
-        ticket.setFirstRespondedAt(TEST_TIME);
-        TicketRequest request = TicketRequest.builder().assignedTo(assigneeId).build();
+        TicketRequest request = TicketRequest.builder()
+                .assignedTo(assigneeId)
+                .build();
 
         when(ticketRepository.findById(ticketId)).thenReturn(Optional.of(ticket));
         when(userRepository.findById(assigneeId)).thenReturn(Optional.of(assignee));
@@ -525,6 +542,9 @@ class TicketServiceTest {
 
         TicketResponse response = ticketService.updateTicket(ticketId, request);
         assertEquals(assigneeId, response.getAssignedTo());
+        assertNotNull(response.getFirstRespondedAt());
+
+        verify(ticketEventPublisher).publishFirstResponse(eq(ticket), eq(assigneeId), any(LocalDateTime.class));
     }
 
     @Test
