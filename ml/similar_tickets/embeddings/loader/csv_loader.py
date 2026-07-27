@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import List, Set
 
-from ..config import INPUT_CSV_PATH
+from ml.similar_tickets.config import INPUT_CSV_PATH
 from ..exceptions import DatasetValidationError
 from ..loader.base_loader import BaseLoader
 from ..models.ticket import Ticket
