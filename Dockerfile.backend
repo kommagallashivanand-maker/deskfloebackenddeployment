@@ -14,13 +14,13 @@ FROM maven:3.9-eclipse-temurin-21-alpine AS builder
 WORKDIR /build
 
 # Copy pom.xml first to cache dependency downloads
-COPY backend/pom.xml ./pom.xml
+COPY java/pom.xml ./pom.xml
 
 # Download dependencies (cached unless pom.xml changes)
 RUN mvn dependency:go-offline -q
 
 # Copy source and build
-COPY backend/src ./src
+COPY java/src ./src
 RUN mvn package -DskipTests -q
 
 

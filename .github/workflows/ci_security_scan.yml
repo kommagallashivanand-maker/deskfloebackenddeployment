@@ -1,10 +1,6 @@
 name: Security CI
 
 on:
-  push:
-    branches:
-      - feature/DF_83_Quality_gates_in_CI
-      - staging
   pull_request:
     branches:
       - staging
@@ -50,28 +46,38 @@ jobs:
           echo "head_sha=${HEAD}" >> "$GITHUB_OUTPUT"
           echo "commit_range=${BASE}..${HEAD}" >> "$GITHUB_OUTPUT"
 
-      # Detect project type by looking for config files
       - name: Detect project type
         id: detect
         run: |
-          TYPE="unknown"
-          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ] || [ -f "setup.py" ]; then
-            if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null; then
+          HAS_PYTHON=false
+          HAS_JAVA=false
+
+          # Check for Python config files
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ] || [ -f "setup.py" ] || \
+             [ -n "$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) 2>/dev/null)" ]; then
+            HAS_PYTHON=true
+          fi
+
+          # Check for Java config files
+          if [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ] || \
+             [ -n "$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null)" ]; then
+            HAS_JAVA=true
+          fi
+
+          if [ "$HAS_PYTHON" = "true" ] && [ "$HAS_JAVA" = "true" ]; then
+            TYPE="both"
+          elif [ "$HAS_JAVA" = "true" ]; then
+            TYPE="java"
+          elif [ "$HAS_PYTHON" = "true" ]; then
+            # Distinguish fastapi vs python-ml if needed
+            if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null || \
+               find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) -exec grep -qiE "fastapi" {} \; 2>/dev/null; then
               TYPE="fastapi"
             else
               TYPE="python-ml"
             fi
-          fi
-          if [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
-            TYPE="java"
-          fi
-          if [ "$TYPE" = "unknown" ]; then
-            PYFILE=$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) | head -1)
-            if [ -n "$PYFILE" ]; then
-              if grep -qiE "fastapi" "$PYFILE" 2>/dev/null; then TYPE="fastapi"; else TYPE="python-ml"; fi
-            fi
-            JFILE=$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) | head -1)
-            if [ -n "$JFILE" ]; then TYPE="java"; fi
+          else
+            TYPE="unknown"
           fi
           echo "project_type=${TYPE}" >> "$GITHUB_OUTPUT"
           echo "Detected: ${TYPE}"
@@ -86,7 +92,7 @@ jobs:
   test-python:
     name: Tests and Coverage (Python)
     needs: detect
-    if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+    if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
     runs-on: ubuntu-latest
     outputs:
       tests_ran: ${{ steps.run-tests.outputs.tests_ran }}
@@ -199,7 +205,7 @@ jobs:
   test-java:
     name: Tests and Coverage (Java)
     needs: detect
-    if: needs.detect.outputs.project_type == 'java'
+    if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
     runs-on: ubuntu-latest
     outputs:
       tests_ran: ${{ steps.results.outputs.tests_ran }}
@@ -332,7 +338,7 @@ jobs:
 
       # Set up Python for pip-audit (Python projects)
       - name: Set up Python
-        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
         uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
@@ -340,7 +346,7 @@ jobs:
       # Scan Python dependencies with pip-audit
       - name: Run pip-audit
         id: pip-audit
-        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi'
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
         env:
           REPORTS_DIR: security-reports
         run: |
@@ -355,7 +361,7 @@ jobs:
 
       # Install Trivy for Java dependency scanning
       - name: Install Trivy
-        if: needs.detect.outputs.project_type == 'java'
+        if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
         run: |
           sudo apt-get install -y wget apt-transport-https gnupg
           wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
@@ -367,7 +373,7 @@ jobs:
       # Scan Java dependencies with Trivy
       - name: Run Trivy scan
         id: trivy
-        if: needs.detect.outputs.project_type == 'java'
+        if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
         env:
           REPORTS_DIR: security-reports
         run: |
@@ -382,16 +388,47 @@ jobs:
       - name: Consolidate audit outputs
         id: audit
         run: |
-          if [ -n "${{ steps.pip-audit.outputs.tool }}" ]; then
-            echo "tool=${{ steps.pip-audit.outputs.tool }}" >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.pip-audit.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
-            echo "critical_high=${{ steps.pip-audit.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.pip-audit.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+          PIP_TOOL="${{ steps.pip-audit.outputs.tool }}"
+          TRIVY_TOOL="${{ steps.trivy.outputs.tool }}"
+          
+          PIP_VULNS="${{ steps.pip-audit.outputs.total_vulns }}"
+          PIP_CRITICAL="${{ steps.pip-audit.outputs.critical_high }}"
+          PIP_STATUS="${{ steps.pip-audit.outputs.audit_status }}"
+          
+          TRIVY_VULNS="${{ steps.trivy.outputs.total_vulns }}"
+          TRIVY_CRITICAL="${{ steps.trivy.outputs.critical_high }}"
+          TRIVY_STATUS="${{ steps.trivy.outputs.audit_status }}"
+          
+          PIP_VULNS=${PIP_VULNS:-0}
+          PIP_CRITICAL=${PIP_CRITICAL:-0}
+          PIP_STATUS=${PIP_STATUS:-PASS}
+          
+          TRIVY_VULNS=${TRIVY_VULNS:-0}
+          TRIVY_CRITICAL=${TRIVY_CRITICAL:-0}
+          TRIVY_STATUS=${TRIVY_STATUS:-PASS}
+          
+          if [ -n "$PIP_TOOL" ] && [ -n "$TRIVY_TOOL" ]; then
+            TOTAL_VULNS=$(( PIP_VULNS + TRIVY_VULNS ))
+            CRITICAL_HIGH=$(( PIP_CRITICAL + TRIVY_CRITICAL ))
+            if [ "$PIP_STATUS" = "FAIL" ] || [ "$TRIVY_STATUS" = "FAIL" ]; then
+              STATUS="FAIL"
+            else
+              STATUS="PASS"
+            fi
+            echo "tool=pip-audit & Trivy" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$TOTAL_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$CRITICAL_HIGH" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$STATUS" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PIP_TOOL" ]; then
+            echo "tool=$PIP_TOOL" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$PIP_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$PIP_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$PIP_STATUS" >> "$GITHUB_OUTPUT"
           else
-            echo "tool=${{ steps.trivy.outputs.tool }}" >> "$GITHUB_OUTPUT"
-            echo "total_vulns=${{ steps.trivy.outputs.total_vulns }}" >> "$GITHUB_OUTPUT"
-            echo "critical_high=${{ steps.trivy.outputs.critical_high }}" >> "$GITHUB_OUTPUT"
-            echo "audit_status=${{ steps.trivy.outputs.audit_status }}" >> "$GITHUB_OUTPUT"
+            echo "tool=$TRIVY_TOOL" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$TRIVY_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$TRIVY_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$TRIVY_STATUS" >> "$GITHUB_OUTPUT"
           fi
 
       # Fail the workflow if critical/high vulnerabilities found
@@ -408,160 +445,7 @@ jobs:
           if-no-files-found: ignore
 
   # ══════════════════════════════════════════════════════════════════════════════
-  # JOB 5: STATIC APPLICATION SECURITY TESTING (SAST) WITH SEMGREP
-  # Purpose: Scans source code for security issues, code smells, and best practices
-  #          using Semgrep with auto config rules
-  #          Generates detailed report with file paths and line numbers
-  #          Fails if ERROR severity findings are detected
-  # Output: semgrep_findings, sast_status, severity_summary
-  # ══════════════════════════════════════════════════════════════════════════════
-  sast:
-    name: SAST Semgrep
-    needs: detect
-    runs-on: ubuntu-latest
-    outputs:
-      semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
-      sast_status: ${{ steps.semgrep.outputs.sast_status }}
-      severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      # Install Semgrep tool
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      # Scan entire codebase for supported file types
-      - name: Run Semgrep
-        id: semgrep
-        env:
-          REPORTS_DIR: security-reports
-        run: |
-          mkdir -p "$REPORTS_DIR"
-
-          # Run semgrep but don't let its exit code abort the step; capture raw output.
-          set +e
-          semgrep \
-                  --config=auto \
-                  --exclude=".github/" \
-                  --exclude="*.yml" \
-                  --exclude="*.yaml" \
-                  --json \
-                  --output "$REPORTS_DIR/semgrep-report.json" \
-                  . 2>&1 | tee "$REPORTS_DIR/semgrep-output.log"
-          SEMGREP_EXIT=${PIPESTATUS[0]:-0}
-          echo "semgrep_exit_code=${SEMGREP_EXIT}" > "$REPORTS_DIR/semgrep-exit.txt"
-
-          # If semgrep didn't produce JSON, create an empty results structure so parser can continue
-          if [ ! -s "$REPORTS_DIR/semgrep-report.json" ]; then
-            printf '{"results": []}' > "$REPORTS_DIR/semgrep-report.json"
-          fi
-          set -e
-
-          # Parse JSON results and generate human-readable report with file-level details
-          python3 <<'EOF'
-          import json, os, sys, traceback
-
-          REPORTS_DIR = os.environ["REPORTS_DIR"]
-          report_json = os.path.join(REPORTS_DIR, "semgrep-report.json")
-          report_log = os.path.join(REPORTS_DIR, "semgrep-output.log")
-          out_txt = os.path.join(REPORTS_DIR, "semgrep_report(SAST).txt")
-
-          try:
-              with open(report_json, "r", encoding="utf-8") as f:
-                  data = json.load(f)
-          except Exception as e:
-              # produce a parse-error report including raw semgrep output
-              raw = ""
-              if os.path.exists(report_log):
-                  raw = open(report_log, "r", encoding="utf-8", errors="replace").read()
-              with open(out_txt, "w", encoding="utf-8") as out:
-                  out.write("="*70 + "\n")
-                  out.write("                 SEMGREP SAST REPORT (PARSE ERROR)\n")
-                  out.write("="*70 + "\n\n")
-                  out.write("Failed to parse semgrep JSON output:\n")
-                  out.write(str(e) + "\n\n")
-                  out.write("Raw semgrep console output:\n\n")
-                  out.write(raw + "\n")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
-                  gh.write("semgrep_findings=0\n")
-                  gh.write("severity_summary=ERROR:JSON_PARSE\n")
-                  gh.write("sast_status=ERROR\n")
-              sys.exit(1)
-
-          results = data.get("results", [])
-          severity_count = {}
-          files = {}
-
-          for r in results:
-              sev = (r.get("extra", {}) .get("severity") or "UNKNOWN").upper()
-              severity_count[sev] = severity_count.get(sev, 0) + 1
-              # robust path extraction with fallbacks
-              path = r.get("path") or r.get("extra", {}).get("metadata", {}).get("filepath") or "<unknown>"
-              files.setdefault(path, []).append(r)
-
-          fail_count = (
-                   severity_count.get("ERROR", 0)
-                   + severity_count.get("HIGH", 0)
-                   + severity_count.get("MEDIUM", 0)
-                    )
-
-          status = "FAIL" if fail_count > 0 else "PASS"
-          summary = ", ".join(f"{k}:{v}" for k, v in severity_count.items()) or "none"
-
-          with open(out_txt, "w", encoding="utf-8") as out:
-              out.write("="*70 + "\n")
-              out.write("                 SEMGREP SAST REPORT\n")
-              out.write("="*70 + "\n\n")
-              out.write(f"Overall Status : {status}\n")
-              out.write(f"Total Findings : {len(results)}\n")
-              out.write(f"Severity Summary : {summary}\n\n")
-
-              if not results:
-                  out.write("No security issues detected.\n\n")
-              else:
-                  out.write("Files with findings (path : count):\n")
-                  for path in sorted(files.keys()):
-                      out.write(f"- {path} : {len(files[path])} findings\n")
-                      for i, r in enumerate(files[path], 1):
-                          check = r.get("check_id") or r.get("rule_id") or "<no-id>"
-                          msg = r.get("extra", {}).get("message") or ""
-                          line = r.get("start", {}).get("line") or r.get("start", {}).get("line_no") or "?"
-                          out.write(f"  {i}) {check} - {msg}\n")
-                          out.write(f"     Line: {line}\n")
-                          code = r.get("extra", {}).get("lines") or ""
-                          if code:
-                              out.write("     Code:\n")
-                              for ln in code.splitlines():
-                                  out.write("       " + ln + "\n")
-                      out.write("\n")
-                  out.write("Detailed JSON and raw semgrep console output are available in artifacts.\n")
-
-          # Write GitHub step outputs
-          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
-               gh.write(f"semgrep_findings={len(results)}\n")
-               gh.write(f"severity_summary={summary}\n")
-               gh.write(f"sast_status={status}\n")
-
-          if status == "FAIL":
-               print("Security vulnerabilities found.")
-               sys.exit(1)
-          
-      # Upload Semgrep reports to artifacts (JSON + human-readable)
-      - name: Upload Semgrep Report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: semgrep_report(SAST)
-          path: |
-            security-reports/semgrep-report.json
-            security-reports/semgrep_report(SAST).txt
-            security-reports/semgrep-output.log
-            security-reports/semgrep-exit.txt
-
-  # ══════════════════════════════════════════════════════════════════════════════
-  # JOB 6: SECRET DETECTION WITH GITLEAKS
+  # JOB 5: SECRET DETECTION WITH GITLEAKS
   # Purpose: Scans repository for exposed secrets (API keys, passwords, tokens, etc.)
   #          using Gitleaks
   #          Fails if any secrets are detected in the changed commits
@@ -619,16 +503,17 @@ jobs:
           if-no-files-found: ignore
 
   # ══════════════════════════════════════════════════════════════════════════════
-  # JOB 7: GENERATE COMPREHENSIVE SECURITY REPORT
+  # JOB 6: GENERATE COMPREHENSIVE SECURITY REPORT
   # Purpose: Consolidates all security scan results from previous jobs into a
-  #          comprehensive PDF report with coverage, vulnerabilities, SAST findings,
-  #          and secret detection results
+  #          comprehensive PDF report with coverage, vulnerabilities, and
+  #          secret detection results.
+  #          SAST report is now generated separately in Deployment.yml.
   # Runs: Always (after all other jobs complete)
-  # Dependencies: detect, test-python, test-java, dependency-audit, sast, secret-scan
+  # Dependencies: detect, test-python, test-java, dependency-audit, secret-scan
   # ══════════════════════════════════════════════════════════════════════════════
   report:
     name: Generate Security Report
-    needs: [detect, test-python, test-java, dependency-audit, sast, secret-scan]
+    needs: [detect, test-python, test-java, dependency-audit, secret-scan]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -661,9 +546,11 @@ jobs:
           TOTAL_VULNS: ${{ needs.dependency-audit.outputs.total_vulns }}
           CRITICAL_HIGH: ${{ needs.dependency-audit.outputs.critical_high }}
           AUDIT_STATUS: ${{ needs.dependency-audit.outputs.audit_status }}
-          SEMGREP_FINDINGS: ${{ needs.sast.outputs.semgrep_findings }}
-          SEVERITY_SUMMARY: ${{ needs.sast.outputs.severity_summary }}
-          SAST_STATUS: ${{ needs.sast.outputs.sast_status }}
+          # SAST results are no longer produced here; set safe defaults so the
+          # report script does not break if it still reads these env vars.
+          SEMGREP_FINDINGS: "N/A"
+          SEVERITY_SUMMARY: "N/A"
+          SAST_STATUS: "N/A"
           SECRETS_FOUND: ${{ needs.secret-scan.outputs.secrets_found }}
           SECRET_STATUS: ${{ needs.secret-scan.outputs.secret_status }}
           COV_THRESHOLD: ${{ env.COV_THRESHOLD }}

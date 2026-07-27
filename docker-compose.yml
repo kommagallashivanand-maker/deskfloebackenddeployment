@@ -19,52 +19,20 @@ name: deskflow
 services:
 
   # ---------------------------------------------------------------------------
-  # PostgreSQL Database
-  # ---------------------------------------------------------------------------
-  postgres:
-    container_name: deskflow-postgres
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: deskflow
-      POSTGRES_USER: ${DB_USERNAME}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d deskflow"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    networks:
-      - deskflow-backend-network
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "20m"
-        max-file: "5"
-    # Postgres is internal only — no ports exposed to host
-    expose:
-      - "5432"
-
-  # ---------------------------------------------------------------------------
   # Spring Boot Backend
   # ---------------------------------------------------------------------------
   backend:
     container_name: deskflow-backend
-    build:
-      context: .
-      dockerfile: Dockerfile.backend
-    image: deskflow/backend:1.0.0
+    image: ${DOCKERHUB_USERNAME}/backend-api:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
-      # Database — uses service name 'postgres' as host (internal DNS)
-      DB_URL: jdbc:postgresql://postgres:5432/deskflow
+      # Database Connection URL (e.g., AWS RDS)
+      DB_URL: ${DB_URL}
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
       # JWT
       JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_MS: ${JWT_EXPIRATION_MS}
       # AWS S3
       AWS_S3_BUCKET: ${AWS_S3_BUCKET:-deskflow-attachments}
       AWS_REGION: ${AWS_REGION:-us-east-1}
@@ -74,9 +42,6 @@ services:
       JAVA_OPTS: "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
     ports:
       - "8080:8080"
-    depends_on:
-      postgres:
-        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8080/actuator/health || exit 1"]
       interval: 30s
@@ -98,10 +63,7 @@ services:
   # ---------------------------------------------------------------------------
   ml-service:
     container_name: deskflow-ml-service
-    build:
-      context: .
-      dockerfile: Dockerfile.ml-service
-    image: deskflow/ml-service:1.0.0
+    image: ${DOCKERHUB_USERNAME}/ml-service:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       SERVICE_NAME: "DeskFlow ML Service"
@@ -133,10 +95,7 @@ services:
   # ---------------------------------------------------------------------------
   priority-feature-extraction:
     container_name: deskflow-priority-feature-extraction
-    build:
-      context: .
-      dockerfile: Dockerfile.priority-feature-extraction
-    image: deskflow/priority-feature-extraction:1.0.0
+    image: ${DOCKERHUB_USERNAME}/priority-feature-extraction:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       APP_NAME: "priority_feature_extractor"
