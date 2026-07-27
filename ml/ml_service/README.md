@@ -1,16 +1,20 @@
 # DeskFlow ML Service
 
-A FastAPI-based Machine Learning service scaffold for the DeskFlow platform.
+A FastAPI-based Machine Learning service for the DeskFlow platform.
 
 ## Overview
 
-This service provides the foundational infrastructure for the DeskFlow ML Platform. It includes health and version endpoints, environment-based configuration, structured logging, and request tracing using correlation IDs.
+This service provides the ML inference layer for the DeskFlow platform, including health and version endpoints, a file-based model registry, structured logging, request tracing using correlation IDs, and semantic ticket similarity search.
 
 ## Features
 
-- FastAPI application scaffold
+- FastAPI application
 - Health check endpoint (`/health`)
-- Version endpoint (`/version`)
+- Version endpoint (`/version`) — shows active model versions
+- Similar tickets retrieval endpoint (`/similar-tickets/{ticket_id}`) — semantic ticket similarity search
+- Ticket embedding indexing endpoint (`/embeddings/index/{ticket_id}`) — stores embeddings in database
+- File-based model registry (`registry/registry.json`)
+- Model loader with in-memory caching
 - Configuration via environment variables
 - Structured application logging
 - Request logging with Correlation ID middleware
@@ -28,16 +32,23 @@ ml_service/
 │   ├── middleware/
 │   │   └── correlation.py         # Correlation ID middleware
 │   └── main.py                    # FastAPI application entry point
-├── .env.example                   # Environment variables template
+├── registry/
+│   ├── __init__.py
+│   ├── registry.json              # Model registry configuration
+│   ├── registry.py                # Registry reader and resolver
+│   └── loader.py                  # Model loader with caching
 ├── requirements.txt               # Project dependencies
-└── README.md                      # Project documentation
+└── README.md                      # This file
 ```
+
+---
 
 ## Setup & Installation
 
 ### Prerequisites
 
 - Python 3.10 or higher
+- A running PostgreSQL database with `pgvector` extension installed (required for ticket similarity searches)
 
 ### Installation
 
@@ -47,65 +58,66 @@ ml_service/
 cd ml/ml_service
 ```
 
-2. Create a virtual environment:
+2. Create and activate a virtual environment:
 
 ```bash
 python -m venv .venv
+.venv\Scripts\activate        # Windows
+source .venv/bin/activate     # Linux/macOS
 ```
 
-3. Activate the virtual environment:
-
-- **PowerShell (Windows)**
-
-```powershell
-.venv\Scripts\Activate.ps1
-```
-
-- **Command Prompt (Windows)**
-
-```cmd
-.venv\Scripts\activate.bat
-```
-
-- **Bash/zsh (Linux/macOS)**
-
-```bash
-source .venv/bin/activate
-```
-
-4. Install the required dependencies:
+3. Install base dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Configuration
+4. Install additional dependencies for the integrated `similar_tickets` features:
 
-Create a `.env` file in the project root using `.env.example` as a template.
-
-```ini
-SERVICE_NAME=DeskFlow ML Service
-SERVICE_VERSION=1.0.0
-
-HOST=0.0.0.0
-PORT=8000
-
-LOG_LEVEL=INFO
+```bash
+pip install -r ../similar_tickets/requirements.txt
 ```
+
+
 
 ## How to Run
 
-Start the development server:
+Since the application imports modules relative to the repository root (e.g., `ml.ml_service`, `ml.similar_tickets`), the repository root directory must be included in the `PYTHONPATH`.
 
+### Option 1: Run from the repository root (Recommended)
+
+1. Navigate to the repository root directory (`Deskflow-Backend/`).
+2. Set the `PYTHONPATH` environment variable and start the application:
+
+**Windows (PowerShell):**
+```powershell
+$env:PYTHONPATH="."
+python -m uvicorn ml.ml_service.app.main:app --reload
+```
+
+**Linux/macOS:**
 ```bash
+PYTHONPATH=. uvicorn ml.ml_service.app.main:app --reload
+```
+
+### Option 2: Run from `ml/ml_service/`
+
+If you prefer to run from the `ml/ml_service/` directory, configure the `PYTHONPATH` to point to the repository root:
+
+**Windows (PowerShell):**
+```powershell
+$env:PYTHONPATH="../.."
 uvicorn app.main:app --reload
 ```
 
-The service will be available at:
-
-```text
-http://127.0.0.1:8000
+**Linux/macOS:**
+```bash
+PYTHONPATH=../.. uvicorn app.main:app --reload
 ```
+
+The service will be available at `http://127.0.0.1:8000`.
+
+---
 
 ## Available Endpoints
 
@@ -115,12 +127,8 @@ http://127.0.0.1:8000
 GET /health
 ```
 
-Response
-
 ```json
-{
-  "status": "healthy"
-}
+{ "status": "healthy" }
 ```
 
 ### Version
@@ -129,32 +137,155 @@ Response
 GET /version
 ```
 
-Response
-
 ```json
 {
   "service": "DeskFlow ML Service",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "models": {
+    "category": "embedding_v1",
+    "priority": "priority_v1_latest"
+  }
 }
 ```
 
-## Logging
+### Similar Tickets
 
-The service uses structured logging to record application events and incoming requests.
+Retrieve the most similar tickets for a given ticket ID using semantic similarity.
 
-For every request, the middleware logs:
-
-- Correlation ID
-- HTTP method
-- Request path
-- Response status code
-- Request processing time
-
-Example log output:
-
-```text
-2026-07-17 07:52:26 | INFO | [28c56e5c-3738-4619-af32-840c3b13d02b] Incoming GET /health
-2026-07-17 07:52:26 | INFO | [28c56e5c-3738-4619-af32-840c3b13d02b] Completed GET /health -> 200 (6.53 ms)
+```http
+GET /similar-tickets/{ticket_id}?limit=5
 ```
 
-The Correlation ID is also returned in the `X-Correlation-ID` response header to enable request tracing across services.
+```json
+{
+  "ticket_id": "123",
+  "similar_tickets": [
+    {
+      "ticket_id": "456",
+      "title": "Database connection issue",
+      "similarity": 0.89
+    }
+  ]
+}
+```
+
+### Ticket Embedding Indexing
+
+Generate and store the semantic embedding for a ticket to make it searchable.
+
+```http
+POST /embeddings/index/{ticket_id}
+```
+
+```json
+{
+  "status": "success",
+  "message": "Ticket indexed successfully.",
+  "ticket_id": "123"
+}
+```
+
+---
+
+## Model Registry
+
+The registry lives in `registry/registry.json`. It maps model family names to versioned artifact paths. The service never duplicates model files — it references their existing locations.
+
+### registry.json structure
+
+```json
+{
+    "category": {
+        "active": "embedding_v1",
+        "versions": {
+            "baseline_v1": {
+                "artifact": "../../baseline_classifier/models/baseline_v1.pkl",
+                "metadata": "../../baseline_classifier/models/baseline_v1_metadata.json",
+                "type": "sklearn_pipeline"
+            },
+            "embedding_v1": {
+                "artifact": "../../embedding_classifier/models/embedding_v1.pkl",
+                "metadata": "../../embedding_classifier/models/embedding_v1_metadata.json",
+                "type": "embedding_artefact"
+            }
+        }
+    }
+}
+```
+
+### Artifact types
+
+| Type | Description |
+|:---|:---|
+| `sklearn_pipeline` | A joblib-serialised sklearn `Pipeline` object |
+| `embedding_artefact` | A joblib-serialised dict with keys `classifier`, `embedding_model_name`, `classes` |
+
+### How to switch the active model version
+
+Edit `registry/registry.json` and change the `"active"` field for the model family. No code changes required. Restart the service to apply.
+
+```json
+"category": {
+    "active": "baseline_v1",   ← change this
+    ...
+}
+```
+
+### How to register a new model version
+
+Add a new entry under `"versions"` for the relevant family and point `"artifact"` to the existing `.pkl` or `.joblib` file:
+
+```json
+"embedding_v2": {
+    "artifact": "../../embedding_classifier/models/embedding_v2.pkl",
+    "metadata": "../../embedding_classifier/models/embedding_v2_metadata.json",
+    "type": "embedding_artefact"
+}
+```
+
+Then set `"active": "embedding_v2"` and restart the service.
+
+### How to add a new model family
+
+Add a new top-level key to `registry.json`:
+
+```json
+"sentiment": {
+    "active": "sentiment_v1",
+    "versions": {
+        "sentiment_v1": {
+            "artifact": "../../sentiment_classifier/models/sentiment_v1.pkl",
+            "metadata": null,
+            "type": "sklearn_pipeline"
+        }
+    }
+}
+```
+
+No loader code changes needed — the registry and loader are family-agnostic.
+
+### Loading models in code
+
+```python
+from registry.loader import load_model
+
+model = load_model("category")          # loads active version
+result = model.predict("Can't login", "Password reset link is broken")
+# → {"category": "Account Access", "confidence": 0.87}
+
+# Load a specific version explicitly
+baseline = load_model("category", version="baseline_v1")
+```
+
+---
+
+## Logging
+
+Every request is logged with its Correlation ID, method, path, status, and duration.
+
+```text
+2026-07-23 00:00:00 | INFO | [abc-123] Incoming GET /version
+2026-07-23 00:00:00 | INFO | [abc-123] Completed GET /version -> 200 (4.21 ms)
+```
+
+The `X-Correlation-ID` header is echoed back in every response.
