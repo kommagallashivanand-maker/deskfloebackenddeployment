@@ -17,14 +17,15 @@ class EmbeddingRepository:
         ticket_id,
     ):
         """
-        Fetch ticket title and description.
+        Fetch ticket details.
         """
 
         query = """
         SELECT
             id,
             title,
-            description
+            description,
+            category_id
         FROM tickets
         WHERE id = %s;
         """
@@ -118,6 +119,7 @@ class EmbeddingRepository:
         SELECT
             t.id AS ticket_id,
             t.title,
+            t.category_id,
             1 - (e.embedding <=> %s) AS similarity
         FROM ticket_embeddings e
         INNER JOIN tickets t
