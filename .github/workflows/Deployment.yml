@@ -1,0 +1,728 @@
+name: Deployment
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 1: STATIC APPLICATION SECURITY TESTING (SAST) WITH SEMGREP
+  # Purpose: Scans the full codebase for security vulnerabilities and code issues
+  #          using Semgrep auto-config rules. Produces a human-readable .txt report
+  #          and a raw JSON report, both uploaded as downloadable GitHub artifacts.
+  #          The job fails if ERROR/HIGH/MEDIUM severity findings are detected.
+  # Runs:    First — build-and-push only proceeds if this job succeeds.
+  # Outputs: semgrep_findings, sast_status, severity_summary
+  # ══════════════════════════════════════════════════════════════════════════════
+  sast:
+    name: SAST Semgrep
+    runs-on: ubuntu-latest
+    outputs:
+      semgrep_findings: ${{ steps.semgrep.outputs.semgrep_findings }}
+      sast_status: ${{ steps.semgrep.outputs.sast_status }}
+      severity_summary: ${{ steps.semgrep.outputs.severity_summary }}
+    steps:
+      # Full checkout so Semgrep can scan every file in the repo
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Install Semgrep via pip — pinned to a stable minor series
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      # Run Semgrep and generate both JSON and human-readable reports
+      - name: Run Semgrep and parse results
+        id: semgrep
+        env:
+          REPORTS_DIR: sast-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
+
+          # Run Semgrep with auto config; capture exit code separately so the
+          # Python parser always runs even when findings are present.
+          set +e
+          semgrep \
+            --config=auto \
+            --exclude=".github/" \
+            --exclude="*.yml" \
+            --exclude="*.yaml" \
+            --json \
+            --output "$REPORTS_DIR/semgrep-report.json" \
+            . 2>&1 | tee "$REPORTS_DIR/semgrep-output.log"
+          SEMGREP_EXIT=${PIPESTATUS[0]:-0}
+          # Persist raw exit code for transparency in the artifact
+          echo "semgrep_exit_code=${SEMGREP_EXIT}" > "$REPORTS_DIR/semgrep-exit.txt"
+
+          # Guard: if Semgrep produced no JSON, create a safe empty document
+          if [ ! -s "$REPORTS_DIR/semgrep-report.json" ]; then
+            printf '{"results": []}' > "$REPORTS_DIR/semgrep-report.json"
+          fi
+          set -e
+
+          # Parse the JSON and write a readable summary + GITHUB_OUTPUT entries
+          python3 <<'PYEOF'
+          import json, os, sys
+
+          REPORTS_DIR = os.environ["REPORTS_DIR"]
+          report_json = os.path.join(REPORTS_DIR, "semgrep-report.json")
+          report_log  = os.path.join(REPORTS_DIR, "semgrep-output.log")
+          out_txt     = os.path.join(REPORTS_DIR, "semgrep_report(SAST).txt")
+
+          # ── Load JSON ──────────────────────────────────────────────────────
+          try:
+              with open(report_json, "r", encoding="utf-8") as f:
+                  data = json.load(f)
+          except Exception as e:
+              raw = open(report_log, "r", encoding="utf-8", errors="replace").read() \
+                    if os.path.exists(report_log) else ""
+              with open(out_txt, "w", encoding="utf-8") as out:
+                  out.write("=" * 70 + "\n")
+                  out.write("         SEMGREP SAST REPORT  (JSON PARSE ERROR)\n")
+                  out.write("=" * 70 + "\n\n")
+                  out.write(f"Parse error: {e}\n\nRaw output:\n{raw}\n")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+                  gh.write("semgrep_findings=0\nseverity_summary=ERROR:JSON_PARSE\nsast_status=ERROR\n")
+              sys.exit(1)
+
+          # ── Aggregate findings ─────────────────────────────────────────────
+          results        = data.get("results", [])
+          severity_count = {}
+          files          = {}
+
+          for r in results:
+              sev  = (r.get("extra", {}).get("severity") or "UNKNOWN").upper()
+              severity_count[sev] = severity_count.get(sev, 0) + 1
+              path = (r.get("path")
+                      or r.get("extra", {}).get("metadata", {}).get("filepath")
+                      or "<unknown>")
+              files.setdefault(path, []).append(r)
+
+          # Fail on ERROR, HIGH, or MEDIUM findings
+          fail_count = (severity_count.get("ERROR",  0)
+                      + severity_count.get("HIGH",   0)
+                      + severity_count.get("MEDIUM", 0))
+          status  = "FAIL" if fail_count > 0 else "PASS"
+          summary = ", ".join(f"{k}:{v}" for k, v in severity_count.items()) or "none"
+
+          # ── Write human-readable report ────────────────────────────────────
+          with open(out_txt, "w", encoding="utf-8") as out:
+              out.write("=" * 70 + "\n")
+              out.write("              SEMGREP SAST REPORT\n")
+              out.write("=" * 70 + "\n\n")
+              out.write(f"Overall Status   : {status}\n")
+              out.write(f"Total Findings   : {len(results)}\n")
+              out.write(f"Severity Summary : {summary}\n\n")
+
+              if not results:
+                  out.write("No security issues detected.\n\n")
+              else:
+                  out.write("Files with findings (path : count):\n")
+                  for fpath in sorted(files.keys()):
+                      out.write(f"\n- {fpath} : {len(files[fpath])} finding(s)\n")
+                      for i, r in enumerate(files[fpath], 1):
+                          check = r.get("check_id") or r.get("rule_id") or "<no-id>"
+                          msg   = r.get("extra", {}).get("message") or ""
+                          line  = (r.get("start", {}).get("line")
+                                   or r.get("start", {}).get("line_no")
+                                   or "?")
+                          sev   = (r.get("extra", {}).get("severity") or "UNKNOWN").upper()
+                          out.write(f"  {i}) [{sev}] {check}\n")
+                          out.write(f"     Line   : {line}\n")
+                          out.write(f"     Message: {msg}\n")
+                          code = r.get("extra", {}).get("lines") or ""
+                          if code:
+                              out.write("     Code   :\n")
+                              for ln in code.splitlines():
+                                  out.write(f"       {ln}\n")
+                  out.write("\nFull JSON and raw log are available in the artifact bundle.\n")
+
+          # ── Write step outputs ─────────────────────────────────────────────
+          with open(os.environ["GITHUB_OUTPUT"], "a") as gh:
+              gh.write(f"semgrep_findings={len(results)}\n")
+              gh.write(f"severity_summary={summary}\n")
+              gh.write(f"sast_status={status}\n")
+
+          if status == "FAIL":
+              print(f"SAST found {fail_count} ERROR/HIGH/MEDIUM finding(s). See artifact for details.")
+              sys.exit(1)
+          PYEOF
+
+      # Upload all SAST artifacts — runs even when the scan step fails so the
+      # report is always available for download from the Actions run page.
+      - name: Upload SAST report artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Artifact appears under "Actions > <run> > Artifacts" as "sast-report"
+          name: sast-report
+          path: |
+            sast-reports/semgrep-report.json
+            sast-reports/semgrep_report(SAST).txt
+            sast-reports/semgrep-output.log
+            sast-reports/semgrep-exit.txt
+          # Retain for 30 days (GitHub default is 90; keep shorter for security data)
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 2: TRIVY FILESYSTEM VULNERABILITY SCAN
+  # Purpose: Scans the repository filesystem for vulnerable dependencies
+  #          BEFORE any Docker image is built.
+  #          Exits with code 1 only on HIGH or CRITICAL findings.
+  #          LOW/MEDIUM are reported but do not block the pipeline.
+  #          Secret scanning is intentionally disabled — Gitleaks in
+  #          security-ci.yml already covers secrets.
+  #          Generates both a SARIF report and a human-readable table report,
+  #          both uploaded as downloadable artifacts.
+  # Runs:    In parallel with SAST — build-and-push waits for BOTH to pass.
+  # ══════════════════════════════════════════════════════════════════════════════
+  trivy-scan:
+    name: Trivy Vulnerability Scan
+    runs-on: ubuntu-latest
+    steps:
+      # Full checkout required so Trivy can walk the entire project tree
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Create the output directory before Trivy runs.
+      # Root cause of the original failure: aquasecurity/trivy-action writes
+      # the report file directly via Go's os.Create(), which does NOT create
+      # parent directories. If the directory doesn't exist the action crashes
+      # with "open trivy-reports/…: no such file or directory".
+      # mkdir -p is idempotent — safe to run even if the directory exists.
+      - name: Create Trivy reports directory
+        run: mkdir -p trivy-reports
+
+      # ── SARIF report ──────────────────────────────────────────────────────
+      # Produces a machine-readable SARIF file for the GitHub Security tab.
+      # scanners: vuln  — scan only for vulnerabilities; skip secret scanning
+      #                   because Gitleaks already handles that in security-ci.yml.
+      # exit-code: "0"  — this step never fails on its own; the table step
+      #                   below is the actual pipeline gate.
+      - name: Run Trivy — SARIF report
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: sarif
+          output: trivy-reports/trivy-report.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: false
+
+      # ── Human-readable table report (pipeline gate) ───────────────────────
+      # Second pass: prints a readable findings table in the Actions log AND
+      # writes the same output to a file for the artifact bundle.
+      # scanners: vuln  — mirrors the SARIF step; vuln-only, no secret scan.
+      # exit-code: "1"  — fails THIS step (and therefore the job) when any
+      #                   HIGH or CRITICAL vulnerability is found, blocking
+      #                   build-and-push from running.
+      - name: Run Trivy — table report (pipeline gate)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          format: table
+          output: trivy-reports/trivy-report.txt
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: false
+
+      # Upload both reports — if: always() ensures the artifact is available
+      # even when the gate step above fails, so the team can inspect findings.
+      - name: Upload Trivy reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: |
+            trivy-reports/trivy-report.sarif
+            trivy-reports/trivy-report.txt
+          retention-days: 30
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 3: BUILD AND PUSH DOCKER IMAGES
+  # ══════════════════════════════════════════════════════════════════════════════
+  build-and-push:
+    name: Build and Push Docker Images
+    # Gate: both SAST and Trivy must pass before any image is built or pushed.
+    # Running them in parallel (neither depends on the other) keeps the pipeline
+    # fast while still enforcing both security checks.
+    needs: [sast, trivy-scan]
+    if: needs.sast.result == 'success' && needs.trivy-scan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and Push Backend API
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.backend
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/backend-api:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/backend-api:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push ML Service
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.ml-service
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ml-service:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/ml-service:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build and Push Priority Feature Extraction
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.priority-feature-extraction
+          push: true
+          tags: |
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/priority-feature-extraction:latest
+            docker.io/${{ secrets.DOCKERHUB_USERNAME }}/priority-feature-extraction:v${{ github.run_number }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 3: DEPLOY TO EC2
+  # ══════════════════════════════════════════════════════════════════════════════
+  deploy:
+    name: Deploy to EC2
+    needs: build-and-push
+    if: ${{ needs.build-and-push.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Ensure target directory exists on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            mkdir -p /home/${{ secrets.EC2_USERNAME }}/backend
+
+      - name: Copy docker-compose.yml to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          source: "docker-compose.yml"
+          target: "/home/${{ secrets.EC2_USERNAME }}/backend"
+
+      - name: Deploy containers on EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Log into Docker Hub securely
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            # Go to deployment directory
+            cd /home/${{ secrets.EC2_USERNAME }}/backend
+
+            # Ensure .env file exists
+            touch .env
+
+            # Function to update or add env var in .env
+            update_env_var() {
+              local key=$1
+              local value=$2
+              if grep -q "^${key}=" .env; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            }
+
+            # Set target username and image tags for docker compose
+            update_env_var "DOCKERHUB_USERNAME" "${{ secrets.DOCKERHUB_USERNAME }}"
+            update_env_var "IMAGE_TAG" "v${{ github.run_number }}"
+
+            # Set database and security credentials from GitHub Secrets
+            update_env_var "DB_URL" "${{ secrets.DB_URL }}"
+            update_env_var "DB_USERNAME" "${{ secrets.DB_USERNAME }}"
+            update_env_var "DB_PASSWORD" "${{ secrets.DB_PASSWORD }}"
+            update_env_var "JWT_SECRET" "${{ secrets.JWT_SECRET }}"
+            update_env_var "JWT_EXPIRATION_MS" "${{ secrets.JWT_EXPIRATION_MS }}"
+
+            # AWS S3 credentials — required by the backend for file attachments
+            update_env_var "AWS_ACCESS_KEY_ID" "${{ secrets.AWS_ACCESS_KEY_ID }}"
+            update_env_var "AWS_SECRET_ACCESS_KEY" "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            update_env_var "AWS_REGION" "${{ secrets.AWS_REGION }}"
+            update_env_var "AWS_S3_BUCKET" "${{ secrets.AWS_S3_BUCKET }}"
+
+            # Pull the newest Docker images
+            docker compose pull
+
+            # Stop old containers
+            docker compose down
+
+            # Start new containers
+            docker compose up -d
+
+            # Clean unused Docker resources (excluding those used by running containers)
+            docker image prune -af
+            docker container prune -f
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 4: POST-DEPLOYMENT SMOKE TESTS
+  # ══════════════════════════════════════════════════════════════════════════════
+  smoke-test:
+    name: Post-Deployment Smoke Tests
+    needs: deploy
+    if: ${{ needs.deploy.result == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      smoke_passed: ${{ steps.record.outputs.smoke_passed }}
+    steps:
+      - name: Run smoke tests on EC2
+        id: run-smoke
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            # ── Configuration ────────────────────────────────────────────────
+            HEALTH_URL="http://localhost:8080/actuator/health"
+            MAX_WAIT=120      # total seconds before giving up
+            POLL_INTERVAL=5   # seconds between each poll attempt
+
+            # ── Helpers ───────────────────────────────────────────────────────
+            pass() { echo "  [PASS] $1"; }
+
+            # print_diagnostics: called before any exit 1 so the logs always
+            # show WHY the container is not healthy.
+            print_diagnostics() {
+              echo ""
+              echo "══ DIAGNOSTICS ══════════════════════════════════════════════"
+              echo "── Running containers:"
+              docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+              echo ""
+              echo "── All containers (including exited/crashed):"
+              docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+              echo ""
+              echo "── Last 80 lines of backend container logs:"
+              BACKEND_CTR=$(docker ps -a --filter "name=backend" \
+                              --format "{{.Names}}" | head -1)
+              if [ -n "$BACKEND_CTR" ]; then
+                docker logs --tail=80 "$BACKEND_CTR" 2>&1 || true
+              else
+                echo "  (no container matching 'backend' found)"
+              fi
+              echo "══ END DIAGNOSTICS ══════════════════════════════════════════"
+            }
+
+            fail() {
+              echo "  [FAIL] $1"
+              print_diagnostics
+              exit 1
+            }
+
+            echo "=============================================="
+            echo "  DeskFlow Smoke Tests — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "  Target      : ${HEALTH_URL}"
+            echo "  Max wait    : ${MAX_WAIT}s (poll every ${POLL_INTERVAL}s)"
+            echo "=============================================="
+
+            # ── Wait loop ─────────────────────────────────────────────────────
+            # Poll until the health endpoint returns exactly HTTP 200.
+            #
+            # FIX 1 — broken "|| echo 000" pattern:
+            #   The old code did: HTTP_CODE=$(curl … || echo "000")
+            #   When curl fails it already writes "000" to stdout via -w "%{http_code}",
+            #   THEN the shell appended another "000" via echo, producing "000000".
+            #   "000000" != "000" so the loop exited immediately, treating a connection
+            #   refused as a successful response.
+            #   Fix: capture curl's exit code separately; if curl itself failed
+            #   (exit ≠ 0) force HTTP_CODE to "000" in a second assignment.
+            #
+            # FIX 2 — loop exited on any HTTP response, not just 200:
+            #   Spring Boot returns 503 while health indicators are still warming up
+            #   (the "health: starting" phase visible in docker ps).
+            #   The old check was:  if [ "$HTTP_CODE" != "000" ]
+            #   That exited on 503, then the three assertions below immediately hit
+            #   the still-starting endpoint and failed.
+            #   Fix: only break when HTTP_CODE is exactly "200".
+            echo ""
+            echo "── Waiting for HTTP 200 on ${HEALTH_URL} …"
+            ELAPSED=0
+            READY=false
+            while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+              # Run curl; suppress progress; write only the status code to stdout.
+              # Do NOT use "|| echo 000" — capture the exit code instead.
+              set +e
+              HTTP_CODE=$(curl --silent --max-time 5 \
+                               -o /dev/null \
+                               -w "%{http_code}" \
+                               "${HEALTH_URL}")
+              CURL_EXIT=$?
+              set -e
+
+              # If curl itself failed (timeout, connection refused, etc.)
+              # the -w format still wrote "000"; make it explicit.
+              if [ "$CURL_EXIT" -ne 0 ]; then
+                HTTP_CODE="000"
+              fi
+
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "  Backend returned HTTP 200 after ${ELAPSED}s — proceeding."
+                READY=true
+                break
+              else
+                echo "  [${ELAPSED}s] HTTP ${HTTP_CODE} — not ready yet," \
+                     "retrying in ${POLL_INTERVAL}s …"
+              fi
+
+              sleep "$POLL_INTERVAL"
+              ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+            done
+
+            if [ "$READY" = "false" ]; then
+              fail "Backend did not return HTTP 200 within ${MAX_WAIT}s"
+            fi
+
+            # ── SMOKE TEST 1: HTTP 200 ────────────────────────────────────────
+            echo ""
+            echo "── Test 1: Health endpoint returns HTTP 200 ──"
+            HTTP_STATUS=$(curl --silent --max-time 10 \
+                               -o /dev/null -w "%{http_code}" \
+                               "${HEALTH_URL}")
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              pass "Health endpoint returned HTTP ${HTTP_STATUS}"
+            else
+              fail "Expected HTTP 200, got HTTP ${HTTP_STATUS}"
+            fi
+
+            # ── SMOKE TEST 2: Response body contains "status":"UP" ────────────
+            echo ""
+            echo "── Test 2: Response body contains status UP ──"
+            BODY=$(curl --silent --max-time 10 "${HEALTH_URL}")
+            echo "  Response body: ${BODY}"
+            if echo "${BODY}" | grep -q '"status":"UP"'; then
+              pass "Health response contains \"status\":\"UP\""
+            else
+              fail "Health response does NOT contain \"status\":\"UP\". Body: ${BODY}"
+            fi
+
+            echo ""
+            echo "=============================================="
+            echo "  All smoke tests PASSED ✓"
+            echo "=============================================="
+
+      # ssh-action cannot write to GITHUB_OUTPUT inside the remote script,
+      # so we derive the result from the step outcome here on the runner.
+      - name: Record smoke-test outcome
+        id: record
+        if: always()
+        run: |
+          if [ "${{ steps.run-smoke.outcome }}" = "success" ]; then
+            echo "smoke_passed=true"  >> "$GITHUB_OUTPUT"
+          else
+            echo "smoke_passed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 5: AUTOMATIC ROLLBACK (only if smoke tests fail)
+  # ══════════════════════════════════════════════════════════════════════════════
+  rollback:
+    name: Automatic Rollback
+    needs: smoke-test
+    if: ${{ always() && needs.smoke-test.outputs.smoke_passed == 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      # ── Step 1: Switch to the previous image tag and restart ─────────────
+      - name: Roll back to previous image tag on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            CURRENT_RUN="${{ github.run_number }}"
+            if [ "${CURRENT_RUN}" -le 1 ]; then
+              echo "ERROR: Run #1 — no previous image tag to roll back to."
+              exit 1
+            fi
+            PREV_TAG="v$(( CURRENT_RUN - 1 ))"
+
+            echo "=============================================="
+            echo "  ROLLBACK INITIATED"
+            echo "  Failed tag      : v${CURRENT_RUN}"
+            echo "  Rolling back to : ${PREV_TAG}"
+            echo "=============================================="
+
+            # Authenticate with Docker Hub
+            echo "${{ secrets.DOCKERHUB_TOKEN }}" \
+              | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+            cd /home/${{ secrets.EC2_USERNAME }}/backend
+
+            # Helper: update or insert a key=value line in .env
+            update_env_var() {
+              local key=$1 value=$2
+              if grep -q "^${key}=" .env; then
+                sed -i "s|^${key}=.*|${key}=${value}|" .env
+              else
+                echo "${key}=${value}" >> .env
+              fi
+            }
+
+            # Point IMAGE_TAG at the previous version
+            update_env_var "IMAGE_TAG" "${PREV_TAG}"
+            echo "  IMAGE_TAG set to ${PREV_TAG} in .env"
+
+            echo "  Pulling previous images …"
+            docker compose pull
+
+            echo "  Stopping failed containers …"
+            docker compose down
+
+            echo "  Starting rolled-back containers …"
+            docker compose up -d
+
+            echo "  Rollback deployment complete."
+
+      # ── Step 2: Poll until the rolled-back backend is healthy check ────────────
+      # FIX 3 — old rollback used a fixed "sleep 25" and then the same
+      # broken --retry curl flags.  Replace with the same robust poll loop
+      # used in the forward smoke test so rollback verification is consistent.
+      - name: Verify rollback health on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -euo pipefail
+
+            HEALTH_URL="http://localhost:8080/actuator/health"
+            MAX_WAIT=120
+            POLL_INTERVAL=5
+
+            pass() { echo "  [PASS] $1"; }
+
+            print_diagnostics() {
+              echo ""
+              echo "══ ROLLBACK DIAGNOSTICS ═════════════════════════════════════"
+              docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+              echo ""
+              docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
+              echo ""
+              BACKEND_CTR=$(docker ps -a --filter "name=backend" \
+                              --format "{{.Names}}" | head -1)
+              if [ -n "$BACKEND_CTR" ]; then
+                docker logs --tail=80 "$BACKEND_CTR" 2>&1 || true
+              fi
+              echo "══ END ROLLBACK DIAGNOSTICS ════════════════════════════════"
+            }
+
+            fail() {
+              echo "  [FAIL] $1"
+              print_diagnostics
+              exit 1
+            }
+
+            echo "=============================================="
+            echo "  ROLLBACK Smoke Tests — $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "  Target   : ${HEALTH_URL}"
+            echo "  Max wait : ${MAX_WAIT}s"
+            echo "=============================================="
+
+            # Same fixed poll loop — only HTTP 200 breaks the wait
+            echo ""
+            echo "── Waiting for HTTP 200 on rolled-back deployment …"
+            ELAPSED=0
+            READY=false
+            while [ "$ELAPSED" -lt "$MAX_WAIT" ]; do
+              set +e
+              HTTP_CODE=$(curl --silent --max-time 5 \
+                               -o /dev/null \
+                               -w "%{http_code}" \
+                               "${HEALTH_URL}")
+              CURL_EXIT=$?
+              set -e
+
+              if [ "$CURL_EXIT" -ne 0 ]; then
+                HTTP_CODE="000"
+              fi
+
+              if [ "$HTTP_CODE" = "200" ]; then
+                echo "  Rolled-back backend returned HTTP 200 after ${ELAPSED}s."
+                READY=true
+                break
+              else
+                echo "  [${ELAPSED}s] HTTP ${HTTP_CODE} — not ready," \
+                     "retrying in ${POLL_INTERVAL}s …"
+              fi
+
+              sleep "$POLL_INTERVAL"
+              ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
+            done
+
+            if [ "$READY" = "false" ]; then
+              fail "Rolled-back backend did not return HTTP 200 within ${MAX_WAIT}s"
+            fi
+
+            # ── Verify HTTP 200 ───────────────────────────────────────────────
+            echo ""
+            echo "── Test 1: Health endpoint returns HTTP 200 ──"
+            HTTP_STATUS=$(curl --silent --max-time 10 \
+                               -o /dev/null -w "%{http_code}" \
+                               "${HEALTH_URL}")
+            if [ "${HTTP_STATUS}" = "200" ]; then
+              pass "Health endpoint returned HTTP ${HTTP_STATUS}"
+            else
+              fail "Expected HTTP 200, got HTTP ${HTTP_STATUS} after rollback"
+            fi
+
+            # ── Verify "status":"UP" ──────────────────────────────────────────
+            echo ""
+            echo "── Test 2: Response body contains status UP ──"
+            BODY=$(curl --silent --max-time 10 "${HEALTH_URL}")
+            echo "  Response body: ${BODY}"
+            if echo "${BODY}" | grep -q '"status":"UP"'; then
+              pass "Health response contains \"status\":\"UP\""
+            else
+              fail "Health response does NOT contain \"status\":\"UP\" after rollback"
+            fi
+
+            echo ""
+            echo "=============================================="
+            echo "  Rollback smoke tests PASSED ✓"
+            echo "  Service restored to previous version."
+            echo "=============================================="

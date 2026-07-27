@@ -1,6 +1,6 @@
 import logging
 import sys
-from app.core.config import settings
+from ml.ml_service.app.core.config import settings
 
 def setup_logging() -> None:
     logging.basicConfig(

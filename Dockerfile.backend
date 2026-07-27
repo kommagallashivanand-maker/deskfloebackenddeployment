@@ -1,0 +1,50 @@
+# =============================================================================
+# Dockerfile.backend
+# DeskFlow Spring Boot Backend
+#
+# Service:     Spring Boot REST API
+# Java:        21
+# Build tool:  Maven
+# Port:        8080
+# =============================================================================
+
+# --- Stage 1: Build ---
+FROM maven:3.9-eclipse-temurin-21-alpine AS builder
+
+WORKDIR /build
+
+# Copy pom.xml first to cache dependency downloads
+COPY java/pom.xml ./pom.xml
+
+# Download dependencies (cached unless pom.xml changes)
+RUN mvn dependency:go-offline -q
+
+# Copy source and build
+COPY java/src ./src
+RUN mvn package -DskipTests -q
+
+
+# --- Stage 2: Production Runtime ---
+FROM eclipse-temurin:21-jre-alpine AS runtime
+
+LABEL maintainer="DeskFlow Team" \
+      service="backend" \
+      description="DeskFlow Spring Boot REST API" \
+      version="1.0.0"
+
+# Create non-root user
+RUN addgroup --gid 1001 appgroup && \
+    adduser --uid 1001 --ingroup appgroup --no-create-home --disabled-password appuser
+
+WORKDIR /app
+
+COPY --from=builder --chown=appuser:appgroup /build/target/*.jar app.jar
+
+USER appuser
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8080/actuator/health || exit 1
+
+ENTRYPOINT ["java", "-XX:+UseContainerSupport", "-XX:MaxRAMPercentage=75.0", "-jar", "app.jar"]

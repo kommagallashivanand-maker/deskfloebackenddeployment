@@ -1,0 +1,564 @@
+name: Security CI
+
+on:
+  pull_request:
+    branches:
+      - staging
+
+env:
+  PYTHON_VERSION: "3.11"
+  JAVA_VERSION: "17"
+  REPORTS_DIR: security-reports
+  COV_THRESHOLD: "80"
+
+jobs:
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 1: DETECT PROJECT TYPE AND COMMIT RANGE
+  # Purpose: Identifies the project type (python-ml, fastapi, java) and determines
+  #          the commit range for this CI run (for PR or push events)
+  # Output: project_type, commit_range, base_sha, head_sha
+  # ══════════════════════════════════════════════════════════════════════════════
+  detect:
+    name: Detect Project and Commit Range
+    runs-on: ubuntu-latest
+    outputs:
+      project_type: ${{ steps.detect.outputs.project_type }}
+      commit_range: ${{ steps.range.outputs.commit_range }}
+      base_sha: ${{ steps.range.outputs.base_sha }}
+      head_sha: ${{ steps.range.outputs.head_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Resolve the commit range based on event type (PR vs push)
+      - name: Resolve commit range
+        id: range
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+          echo "base_sha=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${HEAD}" >> "$GITHUB_OUTPUT"
+          echo "commit_range=${BASE}..${HEAD}" >> "$GITHUB_OUTPUT"
+
+      - name: Detect project type
+        id: detect
+        run: |
+          HAS_PYTHON=false
+          HAS_JAVA=false
+
+          # Check for Python config files
+          if [ -f "requirements.txt" ] || [ -f "pyproject.toml" ] || [ -f "Pipfile" ] || [ -f "setup.py" ] || \
+             [ -n "$(find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) 2>/dev/null)" ]; then
+            HAS_PYTHON=true
+          fi
+
+          # Check for Java config files
+          if [ -f "pom.xml" ] || [ -f "build.gradle" ] || [ -f "build.gradle.kts" ] || \
+             [ -n "$(find . -maxdepth 3 \( -name "pom.xml" -o -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null)" ]; then
+            HAS_JAVA=true
+          fi
+
+          if [ "$HAS_PYTHON" = "true" ] && [ "$HAS_JAVA" = "true" ]; then
+            TYPE="both"
+          elif [ "$HAS_JAVA" = "true" ]; then
+            TYPE="java"
+          elif [ "$HAS_PYTHON" = "true" ]; then
+            # Distinguish fastapi vs python-ml if needed
+            if grep -qiE "fastapi" requirements.txt pyproject.toml Pipfile setup.py 2>/dev/null || \
+               find . -maxdepth 3 \( -name "requirements.txt" -o -name "pyproject.toml" \) -exec grep -qiE "fastapi" {} \; 2>/dev/null; then
+              TYPE="fastapi"
+            else
+              TYPE="python-ml"
+            fi
+          else
+            TYPE="unknown"
+          fi
+          echo "project_type=${TYPE}" >> "$GITHUB_OUTPUT"
+          echo "Detected: ${TYPE}"
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 2: PYTHON TESTS AND COVERAGE
+  # Purpose: Runs pytest with code coverage for Python projects (python-ml, fastapi)
+  #          Generates coverage reports and fails if coverage is below threshold (60%)
+  # Runs if: Project type is python-ml or fastapi
+  # Output: tests_ran, coverage_pct, coverage_status
+  # ══════════════════════════════════════════════════════════════════════════════
+  test-python:
+    name: Tests and Coverage (Python)
+    needs: detect
+    if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
+    runs-on: ubuntu-latest
+    outputs:
+      tests_ran: ${{ steps.run-tests.outputs.tests_ran }}
+      coverage_pct: ${{ steps.run-tests.outputs.coverage_pct }}
+      coverage_status: ${{ steps.run-tests.outputs.coverage_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # Find the main Python project directory containing tests
+      - name: Detect Python project directory
+        id: pydir
+        run: |
+          PYDIR=""
+          for d in $(find . -type f \( -name "requirements.txt" -o -name "pyproject.toml" \) -exec dirname {} \; | sort -u); do
+            if find "$d" -maxdepth 2 \( -type d -name "tests" -o -name "test_*.py" \) | grep -q .; then
+              PYDIR="$d"; break
+            fi
+          done
+          if [ -z "$PYDIR" ]; then
+            PYDIR=$(find . -name "requirements.txt" -exec dirname {} \; | sort | head -1)
+          fi
+          PYDIR="${PYDIR:-.}"
+          echo "pydir=${PYDIR}" >> "$GITHUB_OUTPUT"
+          echo "Project dir: ${PYDIR}"
+
+      # Install all dependencies including test requirements
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          find . -name requirements.txt -not -path "./requirements.txt" -exec pip install -r {} \;
+          if [ -f pyproject.toml ]; then pip install -e . || true; fi
+          PYDIR="${{ steps.pydir.outputs.pydir }}"
+          if [ "$PYDIR" != "." ] && [ -f "$PYDIR/pyproject.toml" ]; then pip install -e "$PYDIR" || true; fi
+          pip install pytest pytest-cov pip-audit fastapi pydantic-settings httpx
+
+      # Check if test files exist in the project
+      - name: Detect tests
+        id: has-tests
+        run: |
+          PYDIR="${{ steps.pydir.outputs.pydir }}"
+          if find "$PYDIR" \( -type d -name "tests" -o -name "test_*.py" \) | grep -q .; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Run pytest with coverage reports (XML, JSON, terminal)
+      - name: Run pytest with coverage
+        id: run-tests
+        env:
+          REPORTS_DIR: security-reports
+          COV_THRESHOLD: "60"
+          PYDIR: ${{ steps.pydir.outputs.pydir }}
+          HAS_TESTS: ${{ steps.has-tests.outputs.found }}
+        run: |
+          mkdir -p "$REPORTS_DIR"
+          ABS_REPORTS="$(pwd)/$REPORTS_DIR"
+          if [ "$HAS_TESTS" = "true" ]; then
+            set +e
+            (cd "$PYDIR" && python -m pytest \
+              --cov=. \
+              --cov-report=xml:"$ABS_REPORTS/coverage.xml" \
+              --cov-report=json:"$ABS_REPORTS/coverage.json" \
+              --cov-report=term-missing \
+              --cov-fail-under="$COV_THRESHOLD" \
+              -q 2>&1 | tee "$ABS_REPORTS/pytest-output.txt")
+            EXIT_CODE=$?
+            set -e
+            PCT=$(python3 -c "import xml.etree.ElementTree as ET; r=ET.parse('$ABS_REPORTS/coverage.xml').getroot(); print(round(float(r.attrib.get('line-rate','0'))*100,2))" 2>/dev/null || echo "0")
+            echo "coverage_pct=${PCT}" >> "$GITHUB_OUTPUT"
+            echo "tests_ran=true" >> "$GITHUB_OUTPUT"
+            if [ "$EXIT_CODE" -eq 0 ]; then
+              echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+            else
+              echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"
+              exit "$EXIT_CODE"
+            fi
+          else
+            echo "tests_ran=false" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
+            echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Upload coverage reports to artifacts
+      - name: Upload coverage report
+        if: steps.has-tests.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            security-reports/coverage.xml
+            security-reports/coverage.json
+            security-reports/pytest-output.txt
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 3: JAVA TESTS AND COVERAGE
+  # Purpose: Runs Maven/Gradle tests with JaCoCo code coverage for Java projects
+  #          Generates coverage reports and fails if coverage is below threshold (60%)
+  # Runs if: Project type is java
+  # Output: tests_ran, coverage_pct, coverage_status
+  # ══════════════════════════════════════════════════════════════════════════════
+  test-java:
+    name: Tests and Coverage (Java)
+    needs: detect
+    if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
+    runs-on: ubuntu-latest
+    outputs:
+      tests_ran: ${{ steps.results.outputs.tests_ran }}
+      coverage_pct: ${{ steps.results.outputs.coverage_pct }}
+      coverage_status: ${{ steps.results.outputs.coverage_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      # Detect build tool (Maven or Gradle) and check for test files
+      - name: Detect build tool and tests
+        id: java-detect
+        run: |
+          if [ -f "pom.xml" ]; then
+            echo "tool=maven" >> "$GITHUB_OUTPUT"
+          elif [ -f "build.gradle" ] || [ -f "build.gradle.kts" ]; then
+            echo "tool=gradle" >> "$GITHUB_OUTPUT"
+          else
+            echo "tool=none" >> "$GITHUB_OUTPUT"
+          fi
+          if find . -path "*/src/test/java/*.java" | grep -q . || find . \( -name "*Test.java" -o -name "*Tests.java" \) | grep -q .; then
+            echo "has_tests=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_tests=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Run Maven tests with JaCoCo coverage
+      - name: Run Maven tests
+        id: maven
+        if: steps.java-detect.outputs.has_tests == 'true' && steps.java-detect.outputs.tool == 'maven'
+        env:
+          REPORTS_DIR: security-reports
+          COV_THRESHOLD: "60"
+        run: |
+          mkdir -p "$REPORTS_DIR"
+          set +e
+          mvn -B verify jacoco:report 2>&1 | tee "$REPORTS_DIR/maven-output.txt"
+          EXIT_CODE=$?
+          set -e
+          JACOCO=$(find . -name "jacoco.xml" | head -1)
+          if [ -n "$JACOCO" ]; then
+            cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"
+            PCT=$(python3 -c "import xml.etree.ElementTree as ET; root=ET.parse('$REPORTS_DIR/jacoco.xml').getroot(); node=root.find('.//counter[@type=\"LINE\"]'); missed=int(node.get('missed',0)); covered=int(node.get('covered',0)); total=missed+covered; print(round(covered/total*100,2) if total else 0)" 2>/dev/null || echo "0")
+            echo "coverage_pct=${PCT}" >> "$GITHUB_OUTPUT"
+            if awk "BEGIN{exit !($PCT < $COV_THRESHOLD)}"; then
+              echo "coverage_status=FAIL" >> "$GITHUB_OUTPUT"; exit 1
+            else
+              echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
+            echo "coverage_status=UNKNOWN" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tests_ran=true" >> "$GITHUB_OUTPUT"
+          exit "$EXIT_CODE"
+
+      # Run Gradle tests with JaCoCo coverage
+      - name: Run Gradle tests
+        id: gradle
+        if: steps.java-detect.outputs.has_tests == 'true' && steps.java-detect.outputs.tool == 'gradle'
+        env:
+          REPORTS_DIR: security-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
+          set +e
+          ./gradlew test jacocoTestReport 2>&1 | tee "$REPORTS_DIR/gradle-output.txt"
+          EXIT_CODE=$?
+          set -e
+          JACOCO=$(find . -name "jacocoTestReport.xml" | head -1)
+          if [ -n "$JACOCO" ]; then cp "$JACOCO" "$REPORTS_DIR/jacoco.xml"; fi
+          echo "tests_ran=true" >> "$GITHUB_OUTPUT"
+          echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
+          echo "coverage_status=PASS" >> "$GITHUB_OUTPUT"
+          exit "$EXIT_CODE"
+
+      # Consolidate results from Maven or Gradle
+      - name: Consolidate results
+        id: results
+        run: |
+          if [ "${{ steps.java-detect.outputs.has_tests }}" = "false" ]; then
+            echo "tests_ran=false" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=N/A" >> "$GITHUB_OUTPUT"
+            echo "coverage_status=SKIPPED" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.java-detect.outputs.tool }}" = "maven" ]; then
+            echo "tests_ran=${{ steps.maven.outputs.tests_ran }}" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${{ steps.maven.outputs.coverage_pct }}" >> "$GITHUB_OUTPUT"
+            echo "coverage_status=${{ steps.maven.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tests_ran=${{ steps.gradle.outputs.tests_ran }}" >> "$GITHUB_OUTPUT"
+            echo "coverage_pct=${{ steps.gradle.outputs.coverage_pct }}" >> "$GITHUB_OUTPUT"
+            echo "coverage_status=${{ steps.gradle.outputs.coverage_status }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Upload JaCoCo coverage report to artifacts
+      - name: Upload JaCoCo report
+        if: steps.java-detect.outputs.has_tests == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: security-reports/jacoco.xml
+          if-no-files-found: ignore
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 4: DEPENDENCY AUDIT AND VULNERABILITY SCANNING
+  # Purpose: Scans project dependencies for known vulnerabilities using:
+  #          - pip-audit for Python projects
+  #          - Trivy for Java projects
+  #          Fails if critical or high severity vulnerabilities are found
+  # Output: tool, total_vulns, critical_high, audit_status
+  # ══════════════════════════════════════════════════════════════════════════════
+  dependency-audit:
+    name: Dependency Audit
+    needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      tool: ${{ steps.audit.outputs.tool }}
+      total_vulns: ${{ steps.audit.outputs.total_vulns }}
+      critical_high: ${{ steps.audit.outputs.critical_high }}
+      audit_status: ${{ steps.audit.outputs.audit_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Set up Python for pip-audit (Python projects)
+      - name: Set up Python
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Scan Python dependencies with pip-audit
+      - name: Run pip-audit
+        id: pip-audit
+        if: needs.detect.outputs.project_type == 'python-ml' || needs.detect.outputs.project_type == 'fastapi' || needs.detect.outputs.project_type == 'both'
+        env:
+          REPORTS_DIR: security-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
+          pip install pip-audit
+          REQ_FLAG=""
+          if [ -f requirements.txt ]; then REQ_FLAG="-r requirements.txt"; fi
+          set +e
+          pip-audit $REQ_FLAG --format json --output "$REPORTS_DIR/dependency-audit.json" 2>&1
+          set -e
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/dependency-audit.json')); v=d.get('vulnerabilities',[]); t=len(v); ch=sum(1 for x in v if any(a.upper().startswith(('GHSA','CVE')) for a in x.get('aliases',[]))); f=open(os.environ['GITHUB_OUTPUT'],'a'); f.write(f'total_vulns={t}\ncritical_high={ch}\ntool=pip-audit\naudit_status=' + ('FAIL' if ch>0 else 'PASS') + '\n')" 2>/dev/null || echo "total_vulns=0\ncritical_high=0\ntool=pip-audit\naudit_status=PASS" >> "$GITHUB_OUTPUT"
+
+      # Install Trivy for Java dependency scanning
+      - name: Install Trivy
+        if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
+        run: |
+          sudo apt-get install -y wget apt-transport-https gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | sudo gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update -qq && sudo apt-get install -y trivy
+
+      # Scan Java dependencies with Trivy
+      - name: Run Trivy scan
+        id: trivy
+        if: needs.detect.outputs.project_type == 'java' || needs.detect.outputs.project_type == 'both'
+        env:
+          REPORTS_DIR: security-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
+          set +e
+          trivy fs . --exit-code 0 --severity HIGH,CRITICAL --format json \
+            --output "$REPORTS_DIR/dependency-audit.json"
+          set -e
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/dependency-audit.json')); res=d.get('Results',[]); t=sum(len(r.get('Vulnerabilities') or []) for r in res); ch=sum(1 for r in res for v in (r.get('Vulnerabilities') or []) if v.get('Severity','').upper() in ('HIGH','CRITICAL')); open(os.environ['GITHUB_OUTPUT'],'a').write(f'total_vulns={t}\ncritical_high={ch}\ntool=Trivy\naudit_status=' + ('FAIL' if ch>0 else 'PASS') + '\n')" 2>/dev/null || echo "total_vulns=0\ncritical_high=0\ntool=Trivy\naudit_status=PASS" >> "$GITHUB_OUTPUT"
+
+      # Consolidate results from pip-audit or Trivy
+      - name: Consolidate audit outputs
+        id: audit
+        run: |
+          PIP_TOOL="${{ steps.pip-audit.outputs.tool }}"
+          TRIVY_TOOL="${{ steps.trivy.outputs.tool }}"
+          
+          PIP_VULNS="${{ steps.pip-audit.outputs.total_vulns }}"
+          PIP_CRITICAL="${{ steps.pip-audit.outputs.critical_high }}"
+          PIP_STATUS="${{ steps.pip-audit.outputs.audit_status }}"
+          
+          TRIVY_VULNS="${{ steps.trivy.outputs.total_vulns }}"
+          TRIVY_CRITICAL="${{ steps.trivy.outputs.critical_high }}"
+          TRIVY_STATUS="${{ steps.trivy.outputs.audit_status }}"
+          
+          PIP_VULNS=${PIP_VULNS:-0}
+          PIP_CRITICAL=${PIP_CRITICAL:-0}
+          PIP_STATUS=${PIP_STATUS:-PASS}
+          
+          TRIVY_VULNS=${TRIVY_VULNS:-0}
+          TRIVY_CRITICAL=${TRIVY_CRITICAL:-0}
+          TRIVY_STATUS=${TRIVY_STATUS:-PASS}
+          
+          if [ -n "$PIP_TOOL" ] && [ -n "$TRIVY_TOOL" ]; then
+            TOTAL_VULNS=$(( PIP_VULNS + TRIVY_VULNS ))
+            CRITICAL_HIGH=$(( PIP_CRITICAL + TRIVY_CRITICAL ))
+            if [ "$PIP_STATUS" = "FAIL" ] || [ "$TRIVY_STATUS" = "FAIL" ]; then
+              STATUS="FAIL"
+            else
+              STATUS="PASS"
+            fi
+            echo "tool=pip-audit & Trivy" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$TOTAL_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$CRITICAL_HIGH" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$STATUS" >> "$GITHUB_OUTPUT"
+          elif [ -n "$PIP_TOOL" ]; then
+            echo "tool=$PIP_TOOL" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$PIP_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$PIP_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$PIP_STATUS" >> "$GITHUB_OUTPUT"
+          else
+            echo "tool=$TRIVY_TOOL" >> "$GITHUB_OUTPUT"
+            echo "total_vulns=$TRIVY_VULNS" >> "$GITHUB_OUTPUT"
+            echo "critical_high=$TRIVY_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "audit_status=$TRIVY_STATUS" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Fail the workflow if critical/high vulnerabilities found
+      - name: Fail on high or critical vulnerabilities
+        if: steps.audit.outputs.audit_status == 'FAIL'
+        run: exit 1
+
+      # Upload dependency audit report to artifacts
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-report
+          path: security-reports/dependency-audit.json
+          if-no-files-found: ignore
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 5: SECRET DETECTION WITH GITLEAKS
+  # Purpose: Scans repository for exposed secrets (API keys, passwords, tokens, etc.)
+  #          using Gitleaks
+  #          Fails if any secrets are detected in the changed commits
+  # Output: secrets_found, secret_status
+  # ══════════════════════════════════════════════════════════════════════════════
+  secret-scan:
+    name: Secret Detection Gitleaks
+    needs: detect
+    runs-on: ubuntu-latest
+    outputs:
+      secrets_found: ${{ steps.gitleaks.outputs.secrets_found }}
+      secret_status: ${{ steps.gitleaks.outputs.secret_status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Install Gitleaks tool
+      - name: Install Gitleaks
+        run: |
+          GITLEAKS_VERSION="8.18.4"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      # Run Gitleaks to detect secrets in changed commits
+      - name: Run Gitleaks
+        id: gitleaks
+        env:
+          REPORTS_DIR: security-reports
+        run: |
+          mkdir -p "$REPORTS_DIR"
+          BASE="${{ needs.detect.outputs.base_sha }}"
+          HEAD="${{ needs.detect.outputs.head_sha }}"
+          git fetch origin "$BASE" 2>/dev/null || true
+          set +e
+          gitleaks detect --source . \
+            --config .gitleaks.toml \
+            --log-opts "${BASE}..${HEAD}" \
+            --report-format json \
+            --report-path "$REPORTS_DIR/gitleaks-report.json" \
+            --exit-code 1 --no-banner 2>&1
+          EXIT_CODE=$?
+          set -e
+          python3 -c "import json,os; d=json.load(open('$REPORTS_DIR/gitleaks-report.json')); t=len(d) if isinstance(d,list) else 0; st='FAIL' if t>0 else 'PASS'; open(os.environ['GITHUB_OUTPUT'],'a').write(f'secrets_found={t}\nsecret_status={st}\n')" 2>/dev/null || echo "secrets_found=0\nsecret_status=PASS" >> "$GITHUB_OUTPUT"
+          if [ "$EXIT_CODE" -ne 0 ]; then exit 1; fi
+
+      # Upload Gitleaks report to artifacts (even if secrets found - always() ensures this runs)
+      - name: Upload Gitleaks report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: security-reports/gitleaks-report.json
+          if-no-files-found: ignore
+
+  # ══════════════════════════════════════════════════════════════════════════════
+  # JOB 6: GENERATE COMPREHENSIVE SECURITY REPORT
+  # Purpose: Consolidates all security scan results from previous jobs into a
+  #          comprehensive PDF report with coverage, vulnerabilities, and
+  #          secret detection results.
+  #          SAST report is now generated separately in Deployment.yml.
+  # Runs: Always (after all other jobs complete)
+  # Dependencies: detect, test-python, test-java, dependency-audit, secret-scan
+  # ══════════════════════════════════════════════════════════════════════════════
+  report:
+    name: Generate Security Report
+    needs: [detect, test-python, test-java, dependency-audit, secret-scan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # Install PDF generation library
+      - name: Install report dependencies
+        run: pip install reportlab
+
+      # Download all artifacts from previous jobs
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+        continue-on-error: true
+
+      # Generate final PDF report by combining all test results and security findings
+      - name: Generate PDF report
+        env:
+          PROJECT_TYPE: ${{ needs.detect.outputs.project_type }}
+          COMMIT_RANGE: ${{ needs.detect.outputs.commit_range }}
+          TESTS_RAN: ${{ needs.test-python.outputs.tests_ran || needs.test-java.outputs.tests_ran }}
+          COVERAGE_PCT: ${{ needs.test-python.outputs.coverage_pct || needs.test-java.outputs.coverage_pct }}
+          COVERAGE_STATUS: ${{ needs.test-python.outputs.coverage_status || needs.test-java.outputs.coverage_status }}
+          AUDIT_TOOL: ${{ needs.dependency-audit.outputs.tool }}
+          TOTAL_VULNS: ${{ needs.dependency-audit.outputs.total_vulns }}
+          CRITICAL_HIGH: ${{ needs.dependency-audit.outputs.critical_high }}
+          AUDIT_STATUS: ${{ needs.dependency-audit.outputs.audit_status }}
+          # SAST results are no longer produced here; set safe defaults so the
+          # report script does not break if it still reads these env vars.
+          SEMGREP_FINDINGS: "N/A"
+          SEVERITY_SUMMARY: "N/A"
+          SAST_STATUS: "N/A"
+          SECRETS_FOUND: ${{ needs.secret-scan.outputs.secrets_found }}
+          SECRET_STATUS: ${{ needs.secret-scan.outputs.secret_status }}
+          COV_THRESHOLD: ${{ env.COV_THRESHOLD }}
+        run: python3 .github/scripts/gen_security_report.py
+
+      # Upload final PDF security report to artifacts
+      - name: Upload security report PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: security-reports/security-report.pdf

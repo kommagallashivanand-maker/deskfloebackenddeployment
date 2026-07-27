@@ -2,7 +2,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from app.core.config import settings
+from ml.ml_service.app.core.config import settings
 from registry.registry import RegistryError
 
 router = APIRouter()

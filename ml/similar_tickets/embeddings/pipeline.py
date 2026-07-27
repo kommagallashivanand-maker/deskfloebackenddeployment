@@ -5,48 +5,46 @@ Coordinates the embedding generation workflow.
 """
 
 import logging
-from typing import List
 
-from .config import MODEL_NAME, NORMALIZE_EMBEDDINGS, INPUT_CSV_PATH
-from .embedding_service import EmbeddingService
 from .loader.csv_loader import CsvLoader
-from .models.embedding_result import EmbeddingResult
-from .writer import EmbeddingWriter
+from  ml.similar_tickets.services.similar_ticket_service import SimilarTicketService
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingPipeline:
+    """Coordinates the embedding indexing workflow."""
+
     def __init__(self):
         self.loader = CsvLoader()
-        self.embedding_service = EmbeddingService()
-        self.writer = EmbeddingWriter()
+        self.similar_ticket_service = SimilarTicketService()
 
-    def run(self) -> List[EmbeddingResult]:
+    def run(self) -> int:
+        """
+        Load tickets and index their embeddings into PostgreSQL.
+        """
+
         logger.info("Starting embedding pipeline...")
-        
-        # 1. Load Dataset
-        tickets = self.loader.load_tickets()
-        
-        # 2. Enforce Deterministic Order (sort by ticket_id)
-        tickets.sort(key=lambda t: t.id)
-        
-        # 3. Generate Embeddings
-        results = self.embedding_service.generate_batch(tickets)
-        
-        # 4. Write Embeddings
-        self.writer.save_embeddings(results)
-        
-        # 5. Write Metadata
-        metadata = {
-            "model": MODEL_NAME,
-            "dimension": len(results[0].embedding) if results else 0,
-            "ticket_count": len(results),
-            "normalized": NORMALIZE_EMBEDDINGS,
-            "dataset": INPUT_CSV_PATH.name
-        }
-        self.writer.save_metadata(metadata)
-        
-        logger.info("Embedding pipeline completed successfully.")
 
-        return results
+        # 1. Load dataset
+        tickets = self.loader.load_tickets()
+
+        # 2. Ensure deterministic ordering
+        tickets.sort(key=lambda ticket: ticket.id)
+
+        indexed_count = 0
+
+        # 3. Generate and store embeddings
+        for ticket in tickets:
+            self.similar_ticket_service.index_ticket(
+                ticket_id=ticket.id,
+                text=ticket.text,
+            )
+            indexed_count += 1
+
+        logger.info(
+            "Embedding pipeline completed successfully. Indexed %d tickets.",
+            indexed_count,
+        )
+
+        return indexed_count
