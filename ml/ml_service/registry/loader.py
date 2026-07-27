@@ -1,24 +1,4 @@
-"""
-loader.py — DF-042
-
-Loads model artifacts through the registry.
-
-Responsibilities
-----------------
-- Accept a model family name (e.g. 'category').
-- Consult the ModelRegistry to determine the active version.
-- Resolve the artifact path.
-- Load the artifact using joblib.
-- Return a unified ModelHandle that normalises the two artifact formats
-  (sklearn_pipeline and embedding_artefact) behind a single predict() interface.
-
-Usage
------
-    from registry.loader import load_model
-
-    model = load_model("category")
-    result = model.predict("Cannot login", "Password reset does not work")
-"""
+"""Loads model artifacts through the registry."""
 
 import json
 import logging
@@ -33,23 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class ModelHandle:
-    """
-    A thin wrapper that normalises both artifact formats behind a single
-    predict(title, body) interface.
-
-    Parameters
-    ----------
-    family:
-        Model family name (e.g. 'category').
-    version:
-        Loaded version key (e.g. 'embedding_v1').
-    artifact_type:
-        Either 'sklearn_pipeline' or 'embedding_artefact'.
-    artifact:
-        The raw loaded object from joblib.
-    metadata:
-        Optional dict loaded from the companion metadata JSON file.
-    """
+    """Wrapper normalizing model artifact formats under a predict interface."""
 
     def __init__(
         self,
@@ -139,22 +103,7 @@ class ModelHandle:
     # ------------------------------------------------------------------
 
     def predict(self, title: str, body: str) -> dict:
-        """
-        Predict the ticket category for the given title and body.
-
-        Parameters
-        ----------
-        title:
-            Ticket title text.
-        body:
-            Ticket body text.
-
-        Returns
-        -------
-        dict with keys:
-            - ``category`` (str): Predicted label.
-            - ``confidence`` (float | None): Prediction probability.
-        """
+        """Predict the ticket category for the given title and body."""
         if self.artifact_type == "sklearn_pipeline":
             return self._predict_sklearn_pipeline(title, body)
         if self.artifact_type == "embedding_artefact":
@@ -181,7 +130,7 @@ _model_cache: dict[str, ModelHandle] = {}
 
 
 def get_registry() -> ModelRegistry:
-    """Return the shared ModelRegistry instance, initialising it if needed."""
+    """Get the shared ModelRegistry instance."""
     global _registry
     if _registry is None:
         _registry = ModelRegistry()
@@ -189,30 +138,7 @@ def get_registry() -> ModelRegistry:
 
 
 def load_model(family: str, version: str | None = None) -> ModelHandle:
-    """
-    Load a model through the registry.
-
-    If ``version`` is None, the active version from registry.json is used.
-    Loaded models are cached in memory so repeated calls within the same
-    process do not re-deserialise the artifact from disk.
-
-    Parameters
-    ----------
-    family:
-        Model family name (e.g. 'category', 'priority').
-    version:
-        Explicit version key.  If omitted, the active version is used.
-
-    Returns
-    -------
-    ModelHandle
-        A normalised handle with a predict() method.
-
-    Raises
-    ------
-    RegistryError:
-        If the family or version is not registered, or the artifact is missing.
-    """
+    """Load model artifact and cache it in memory."""
     registry = get_registry()
 
     resolved_version = version or registry.get_active_version(family)
@@ -264,12 +190,7 @@ def load_model(family: str, version: str | None = None) -> ModelHandle:
 
 
 def preload_active_models() -> None:
-    """
-    Pre-load all active models into the in-memory cache.
-
-    Called once on application startup so the first request is not
-    penalised by model deserialisation time.
-    """
+    """Pre-load all active models into the in-memory cache."""
     registry = get_registry()
     for family in registry.families:
         try:

@@ -16,20 +16,7 @@ async def health():
 
 @router.get("/version")
 async def version():
-    """
-    Return service version and the active model version for each family.
-
-    Response
-    --------
-    {
-        "service": "DeskFlow ML Service",
-        "version": "1.0.0",
-        "models": {
-            "category": "embedding_v1",
-            "priority": "priority_v1"
-        }
-    }
-    """
+    """Return service version and the active model version for each family."""
     try:
         from ml.ml_service.registry.loader import get_registry
 

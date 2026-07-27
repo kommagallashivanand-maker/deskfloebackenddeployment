@@ -1,17 +1,4 @@
-"""
-registry.py — DF-042
-
-Reads and validates the registry.json configuration file.
-
-Responsibilities
-----------------
-- Load and parse registry.json.
-- Resolve artifact paths relative to the registry directory.
-- Expose the active version and its configuration for each model family.
-- Validate that referenced artifact files exist on disk.
-
-The registry never loads model objects itself — that is the loader's job.
-"""
+"""Model registry reader and resolver."""
 
 import json
 import logging
@@ -29,18 +16,7 @@ class RegistryError(Exception):
 
 
 class ModelRegistry:
-    """
-    Lightweight, file-based model registry.
-
-    Reads registry.json on initialisation and exposes helpers for
-    querying active versions and resolving artifact paths.
-
-    Parameters
-    ----------
-    registry_path:
-        Path to the registry.json file.  Defaults to the file sitting
-        next to this module.
-    """
+    """File-based model registry that manages active model versions."""
 
     def __init__(self, registry_path: Path = REGISTRY_FILE) -> None:
         self._registry_path = registry_path
@@ -76,23 +52,11 @@ class ModelRegistry:
 
     @property
     def families(self) -> list[str]:
-        """Return all registered model family names (e.g. ['category', 'priority'])."""
+        """List of registered model family names."""
         return list(self._config.keys())
 
     def get_active_version(self, family: str) -> str:
-        """
-        Return the active version name for a model family.
-
-        Parameters
-        ----------
-        family:
-            Model family name (e.g. 'category').
-
-        Raises
-        ------
-        RegistryError:
-            If the family is not registered or has no active version set.
-        """
+        """Get active version name for a model family."""
         if family not in self._config:
             raise RegistryError(
                 f"Model family '{family}' not found in registry. "
@@ -106,21 +70,7 @@ class ModelRegistry:
         return active
 
     def get_version_config(self, family: str, version: str) -> dict[str, Any]:
-        """
-        Return the full configuration dict for a specific version.
-
-        Parameters
-        ----------
-        family:
-            Model family name.
-        version:
-            Version key (e.g. 'embedding_v1').
-
-        Raises
-        ------
-        RegistryError:
-            If the family or version is not registered.
-        """
+        """Get configuration dict for a specific version."""
         if family not in self._config:
             raise RegistryError(
                 f"Model family '{family}' not found in registry."
@@ -134,14 +84,7 @@ class ModelRegistry:
         return versions[version]
 
     def resolve_artifact_path(self, family: str, version: str) -> Path:
-        """
-        Resolve the absolute artifact path for a given family/version.
-
-        Raises
-        ------
-        RegistryError:
-            If the resolved artifact file does not exist on disk.
-        """
+        """Resolve absolute path to model artifact file."""
         cfg = self.get_version_config(family, version)
         artifact_rel: str = cfg.get("artifact", "")
         if not artifact_rel:
@@ -156,9 +99,7 @@ class ModelRegistry:
         return resolved
 
     def resolve_metadata_path(self, family: str, version: str) -> Path | None:
-        """
-        Resolve the absolute metadata JSON path, or None if not configured.
-        """
+        """Resolve absolute path to metadata file, if configured."""
         cfg = self.get_version_config(family, version)
         meta_rel = cfg.get("metadata")
         if not meta_rel:
@@ -166,24 +107,12 @@ class ModelRegistry:
         return self._resolve_path(meta_rel)
 
     def get_artifact_type(self, family: str, version: str) -> str:
-        """
-        Return the artifact type string for a given family/version.
-
-        Supported values
-        ----------------
-        - ``sklearn_pipeline``  — a joblib-serialised sklearn Pipeline
-        - ``embedding_artefact`` — a joblib-serialised dict with keys
-          ``classifier``, ``embedding_model_name``, and ``classes``
-        """
+        """Get artifact type for a model family and version."""
         cfg = self.get_version_config(family, version)
         return cfg.get("type", "sklearn_pipeline")
 
     def active_versions(self) -> dict[str, str]:
-        """
-        Return a mapping of {family: active_version} for all families.
-
-        Used by the /version endpoint.
-        """
+        """Map of model families to active versions."""
         return {family: self.get_active_version(family) for family in self.families}
 
     def list_versions(self, family: str) -> list[str]:

@@ -4,13 +4,15 @@ A FastAPI-based Machine Learning service for the DeskFlow platform.
 
 ## Overview
 
-This service provides the ML inference layer for the DeskFlow platform, including health and version endpoints, a file-based model registry, structured logging, and request tracing using correlation IDs.
+This service provides the ML inference layer for the DeskFlow platform, including health and version endpoints, a file-based model registry, structured logging, request tracing using correlation IDs, and semantic ticket similarity search.
 
 ## Features
 
 - FastAPI application
 - Health check endpoint (`/health`)
 - Version endpoint (`/version`) — shows active model versions
+- Similar tickets retrieval endpoint (`/similar-tickets/{ticket_id}`) — semantic ticket similarity search
+- Ticket embedding indexing endpoint (`/embeddings/index/{ticket_id}`) — stores embeddings in database
 - File-based model registry (`registry/registry.json`)
 - Model loader with in-memory caching
 - Configuration via environment variables
@@ -35,7 +37,6 @@ ml_service/
 │   ├── registry.json              # Model registry configuration
 │   ├── registry.py                # Registry reader and resolver
 │   └── loader.py                  # Model loader with caching
-├── .env.example                   # Environment variables template
 ├── requirements.txt               # Project dependencies
 └── README.md                      # This file
 ```
@@ -47,6 +48,7 @@ ml_service/
 ### Prerequisites
 
 - Python 3.10 or higher
+- A running PostgreSQL database with `pgvector` extension installed (required for ticket similarity searches)
 
 ### Installation
 
@@ -64,24 +66,53 @@ python -m venv .venv
 source .venv/bin/activate     # Linux/macOS
 ```
 
-3. Install dependencies:
+3. Install base dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Copy `.env.example` to `.env`:
+4. Install additional dependencies for the integrated `similar_tickets` features:
 
 ```bash
-cp .env.example .env
+pip install -r ../similar_tickets/requirements.txt
 ```
+
+
 
 ## How to Run
 
-Start from the `ml/ml_service/` directory so that the `registry/` package resolves correctly:
+Since the application imports modules relative to the repository root (e.g., `ml.ml_service`, `ml.similar_tickets`), the repository root directory must be included in the `PYTHONPATH`.
 
+### Option 1: Run from the repository root (Recommended)
+
+1. Navigate to the repository root directory (`Deskflow-Backend/`).
+2. Set the `PYTHONPATH` environment variable and start the application:
+
+**Windows (PowerShell):**
+```powershell
+$env:PYTHONPATH="."
+python -m uvicorn ml.ml_service.app.main:app --reload
+```
+
+**Linux/macOS:**
 ```bash
+PYTHONPATH=. uvicorn ml.ml_service.app.main:app --reload
+```
+
+### Option 2: Run from `ml/ml_service/`
+
+If you prefer to run from the `ml/ml_service/` directory, configure the `PYTHONPATH` to point to the repository root:
+
+**Windows (PowerShell):**
+```powershell
+$env:PYTHONPATH="../.."
 uvicorn app.main:app --reload
+```
+
+**Linux/macOS:**
+```bash
+PYTHONPATH=../.. uvicorn app.main:app --reload
 ```
 
 The service will be available at `http://127.0.0.1:8000`.
@@ -112,8 +143,45 @@ GET /version
   "version": "1.0.0",
   "models": {
     "category": "embedding_v1",
-    "priority": "priority_v1"
+    "priority": "priority_v1_latest"
   }
+}
+```
+
+### Similar Tickets
+
+Retrieve the most similar tickets for a given ticket ID using semantic similarity.
+
+```http
+GET /similar-tickets/{ticket_id}?limit=5
+```
+
+```json
+{
+  "ticket_id": "123",
+  "similar_tickets": [
+    {
+      "ticket_id": "456",
+      "title": "Database connection issue",
+      "similarity": 0.89
+    }
+  ]
+}
+```
+
+### Ticket Embedding Indexing
+
+Generate and store the semantic embedding for a ticket to make it searchable.
+
+```http
+POST /embeddings/index/{ticket_id}
+```
+
+```json
+{
+  "status": "success",
+  "message": "Ticket indexed successfully.",
+  "ticket_id": "123"
 }
 ```
 
