@@ -12,6 +12,28 @@ from ml.ml_service.registry.registry import ModelRegistry, RegistryError
 logger = logging.getLogger(__name__)
 
 
+def _get_priority_feature_extractor():
+    """Import extract_features, TicketIn, AuthContext from ml/priority_feature_extraction.
+
+    Uses ml.common.paths to resolve the directory safely without namespace collision.
+    """
+    import sys
+    from ml.common.paths import get_priority_feature_extraction_dir
+
+    pfe_dir = str(get_priority_feature_extraction_dir())
+    if pfe_dir not in sys.path:
+        sys.path.insert(0, pfe_dir)
+
+    try:
+        from app.models.ticket import TicketIn, AuthContext
+        from app.feature_extraction.feature_extractor import extract_features
+        return extract_features, TicketIn, AuthContext
+    except ImportError as exc:
+        raise ImportError(
+            f"Failed to import feature extractor from '{pfe_dir}': {exc}"
+        ) from exc
+
+
 class ModelHandle:
     """Wrapper normalizing model artifact formats under a predict interface."""
 
@@ -51,24 +73,108 @@ class ModelHandle:
         logger.info("Loading SentenceTransformer: %s", model_name)
         return SentenceTransformer(model_name)
 
-    def _predict_sklearn_pipeline(self, title: str, body: str) -> dict:
-        """Run inference through a standard sklearn Pipeline."""
+    def _build_category_input(self, title: str, body: str):
+        """Build standard title/body DataFrame for category models."""
+        import pandas as pd
+        return pd.DataFrame([{"title": title or "", "body": body or ""}])
+
+    def _build_priority_input(
+        self,
+        title: str = "",
+        body: str = "",
+        category: str | None = None,
+        requester_role: str | None = None,
+        subject: str | None = None,
+        description: str | None = None,
+    ):
+        """Build flat 6-column DataFrame for priority_model using feature extraction.
+
+        Expected columns matching train_priority_model/train.py:
+        keywords, category, sentiment_label, requester_role, sentiment_score, description_length
+        """
         import pandas as pd
 
-        X = pd.DataFrame([{"title": title, "body": body}])
+        extract_features, TicketIn, AuthContext = _get_priority_feature_extractor()
+
+        sub_text = subject if subject is not None else title
+        desc_text = description if description is not None else body
+
+        ticket = TicketIn(
+            subject=sub_text or "",
+            description=desc_text or "",
+            category=category,
+        )
+        auth = AuthContext(
+            user_id="ml_service",
+            role=requester_role,
+        )
+
+        feature_output = extract_features(ticket, auth)
+
+        flat_dict = {
+            "keywords": feature_output.keywords,
+            "category": feature_output.category,
+            "sentiment_label": feature_output.sentiment.label,
+            "requester_role": feature_output.requester_role,
+            "sentiment_score": feature_output.sentiment.score,
+            "description_length": feature_output.description_length,
+        }
+
+        return pd.DataFrame([flat_dict])[
+            [
+                "keywords",
+                "category",
+                "sentiment_label",
+                "requester_role",
+                "sentiment_score",
+                "description_length",
+            ]
+        ]
+
+    def _predict_sklearn_pipeline(
+        self,
+        title: str = "",
+        body: str = "",
+        category: str | None = None,
+        requester_role: str | None = None,
+        subject: str | None = None,
+        description: str | None = None,
+    ) -> dict:
+        """Run inference through a standard sklearn Pipeline."""
         pipeline = self._artifact
 
-        category = pipeline.predict(X)[0]
+        if self.family == "priority":
+            X = self._build_priority_input(
+                title=title,
+                body=body,
+                category=category,
+                requester_role=requester_role,
+                subject=subject,
+                description=description,
+            )
+            prediction = pipeline.predict(X)[0]
 
-        confidence = None
-        if hasattr(pipeline, "predict_proba"):
-            probs = pipeline.predict_proba(X)[0]
-            clf = pipeline.named_steps.get("clf") or pipeline.steps[-1][1]
-            classes = list(clf.classes_)
-            if category in classes:
-                confidence = float(probs[classes.index(category)])
+            confidence = None
+            if hasattr(pipeline, "predict_proba"):
+                probs = pipeline.predict_proba(X)[0]
+                classes = list(pipeline.classes_)
+                if prediction in classes:
+                    confidence = float(probs[classes.index(prediction)])
 
-        return {"category": category, "confidence": confidence}
+            return {"priority": prediction, "confidence": confidence}
+        else:
+            X = self._build_category_input(title=title, body=body)
+            prediction = pipeline.predict(X)[0]
+
+            confidence = None
+            if hasattr(pipeline, "predict_proba"):
+                probs = pipeline.predict_proba(X)[0]
+                clf = pipeline.named_steps.get("clf") or pipeline.steps[-1][1]
+                classes = list(clf.classes_)
+                if prediction in classes:
+                    confidence = float(probs[classes.index(prediction)])
+
+            return {"category": prediction, "confidence": confidence}
 
     def _predict_embedding_artefact(self, title: str, body: str) -> dict:
         """Run inference through the embedding artefact dict."""
@@ -102,12 +208,27 @@ class ModelHandle:
     # Public API
     # ------------------------------------------------------------------
 
-    def predict(self, title: str, body: str) -> dict:
-        """Predict the ticket category for the given title and body."""
+    def predict(
+        self,
+        title: str = "",
+        body: str = "",
+        category: str | None = None,
+        requester_role: str | None = None,
+        subject: str | None = None,
+        description: str | None = None,
+    ) -> dict:
+        """Predict using the loaded model family."""
         if self.artifact_type == "sklearn_pipeline":
-            return self._predict_sklearn_pipeline(title, body)
+            return self._predict_sklearn_pipeline(
+                title=title,
+                body=body,
+                category=category,
+                requester_role=requester_role,
+                subject=subject,
+                description=description,
+            )
         if self.artifact_type == "embedding_artefact":
-            return self._predict_embedding_artefact(title, body)
+            return self._predict_embedding_artefact(title=title, body=body)
         raise RegistryError(
             f"Unknown artifact type '{self.artifact_type}' for "
             f"{self.family}/{self.version}. "

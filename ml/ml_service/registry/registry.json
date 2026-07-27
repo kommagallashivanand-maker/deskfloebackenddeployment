@@ -26,6 +26,11 @@
                 "artifact": "../../train_priority_model/models/priority_model_latest.joblib",
                 "metadata": null,
                 "type": "sklearn_pipeline"
+            },
+            "priority_v1.1.0": {
+                "artifact": "../../train_priority_model/models/priority_model_v1.1.0.joblib",
+                "metadata": null,
+                "type": "sklearn_pipeline"
             }
         }
     }

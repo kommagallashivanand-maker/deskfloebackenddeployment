@@ -44,6 +44,10 @@ COPY --from=builder /install /usr/local
 WORKDIR /app
 
 COPY --chown=appuser:appgroup ml/ml_service/app ./app
+COPY --chown=appuser:appgroup ml/ml_service/registry ./ml/ml_service/registry
+COPY --chown=appuser:appgroup ml/common ./ml/common
+COPY --chown=appuser:appgroup ml/priority_feature_extraction ./ml/priority_feature_extraction
+COPY --chown=appuser:appgroup ml/train_priority_model/models ./ml/train_priority_model/models
 
 USER appuser
 
