@@ -20,7 +20,7 @@ setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Pre-load all active models into memory before the first request."""
-    from registry.loader import preload_active_models
+    from ml.ml_service.registry.loader import preload_active_models
 
     preload_active_models()
     yield

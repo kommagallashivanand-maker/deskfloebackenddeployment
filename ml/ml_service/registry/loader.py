@@ -27,7 +27,7 @@ from typing import Any
 
 import joblib
 
-from registry.registry import ModelRegistry, RegistryError
+from ml.ml_service.registry.registry import ModelRegistry, RegistryError
 
 logger = logging.getLogger(__name__)
 

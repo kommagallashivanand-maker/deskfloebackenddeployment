@@ -3,7 +3,7 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from ml.ml_service.app.core.config import settings
-from registry.registry import RegistryError
+from ml.ml_service.registry.registry import RegistryError
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ async def version():
     }
     """
     try:
-        from registry.loader import get_registry
+        from ml.ml_service.registry.loader import get_registry
 
         registry = get_registry()
         active_models = registry.active_versions()
