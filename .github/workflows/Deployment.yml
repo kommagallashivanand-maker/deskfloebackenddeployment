@@ -7,7 +7,7 @@ on:
 
 jobs:
   # ══════════════════════════════════════════════════════════════════════════════
-  # JOB 1: STATIC APPLICATION SECURITY TESTING (SAST) WITH SEMGREP
+  # JOB 1: STATIC APPLICATION SECURITY TESTING (SAST) WITH SEMG
   # Purpose: Scans the full codebase for security vulnerabilities and code issues
   #          using Semgrep auto-config rules. Produces a human-readable .txt report
   #          and a raw JSON report, both uploaded as downloadable GitHub artifacts.
