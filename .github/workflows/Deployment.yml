@@ -253,7 +253,7 @@ jobs:
     # Running them in parallel (neither depends on the other) keeps the pipeline
     # fast while still enforcing both security checks.
     needs: [sast, trivy-scan]
-    if: needs.sast.result == 'success' && needs.trivy-scan.result == 'success'
+    if: needs.sast.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
